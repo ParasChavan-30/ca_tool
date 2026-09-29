@@ -1,0 +1,7 @@
+{
+  "host": "localhost",
+  "port": 3306,
+  "database": "paras_catool",
+  "user": "paras_catool",
+  "password": "YOUR_CPANEL_DB_PASSWORD"
+}

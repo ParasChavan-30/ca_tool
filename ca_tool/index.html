@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CA Knowledge Hub — Scraper & Admin Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">⚖️</div>
+      <div class="brand-text">
+        <h2>CA Knowledge</h2>
+        <span>Admin Dashboard</span>
+      </div>
+    </div>
+
+    <ul class="nav-menu">
+      <li class="nav-item">
+        <button class="active" data-view="overview">
+          <span>📊</span> Overview
+        </button>
+      </li>
+      <li class="nav-item">
+        <button data-view="sources">
+          <span>🌐</span> Manage Sources
+        </button>
+      </li>
+      <li class="nav-item">
+        <button data-view="knowledge">
+          <span>📚</span> Knowledge Bank
+        </button>
+      </li>
+      <li class="nav-item">
+        <button data-view="logs">
+          <span>📜</span> Execution Logs
+        </button>
+      </li>
+    </ul>
+
+    <div class="sidebar-footer">
+      <p>CA Tool v2.0 • Admin Control Engine</p>
+      <p style="margin-top:4px; opacity:0.7;">MySQL Active • Port 3307</p>
+    </div>
+  </aside>
+
+  <!-- Main Wrapper -->
+  <div class="main-wrapper">
+    <!-- Header Bar -->
+    <header class="header-bar">
+      <div class="header-title">
+        <h1 id="pageTitle">Dashboard Overview</h1>
+        <div id="scraperStatusBadge" class="badge badge-down" style="font-size: 0.8rem; padding: 0.4rem 0.85rem;">
+          ⚪ STOPPED
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="loadOverview()" title="Refresh Dashboard Data">🔄 Refresh</button>
+        <button class="btn btn-success" id="btnStartScraper" title="Start fresh background scraper process for all sources">▶ Sync All Sources</button>
+        <button class="btn btn-warning" id="btnResumeScraper" title="Resume background scraper job">⏯ Resume Scraper</button>
+        <button class="btn btn-danger" id="btnStopScraper" title="Stop running background process">⏹ Stop Scraper</button>
+        <button class="btn btn-primary" id="btnSyncWP" style="background: linear-gradient(135deg, #2563eb, #3b82f6); border: none;" title="Push downloaded/scraped items to WordPress ACF Knowledge Bank CPT">🚀 Sync to WordPress</button>
+        <button class="btn btn-outline" id="btnClearData" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;" title="Clear all scraped database records & PDFs">🗑️ Clear Data</button>
+      </div>
+    </header>
+
+    <!-- Content Container -->
+    <main class="content-container">
+
+      <!-- 1. OVERVIEW VIEW -->
+      <section id="view-overview" class="view-section active">
+        <!-- Stats Cards Grid -->
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+          <div class="stat-card">
+            <div class="stat-icon indigo">📚</div>
+            <div class="stat-info">
+              <div class="num" id="statTotalArticles">0</div>
+              <div class="label">Total Scraped Updates</div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon emerald">✨</div>
+            <div class="stat-info">
+              <div class="num" id="statAddedToday" style="color: #34d399;">0</div>
+              <div class="label">Updates Added Today</div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon cyan">🔄</div>
+            <div class="stat-info">
+              <div class="num" id="statUpdatedArticles">0</div>
+              <div class="label">Content Updates Synced</div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon amber">📎</div>
+            <div class="stat-info">
+              <div class="num" id="statTotalPdfs">0</div>
+              <div class="label">Downloaded PDFs</div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon indigo">🌐</div>
+            <div class="stat-info">
+              <div class="num" id="statActiveSourcesCount" style="color: #818cf8;">0 / 0</div>
+              <div class="label">Active Sources</div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon" style="background: rgba(239, 68, 68, 0.15); color: #f87171;">⚠️</div>
+            <div class="stat-info">
+              <div class="num" id="statFailedSourcesCount" style="color: #f87171;">0</div>
+              <div class="label">Failed / Down Sources</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cron & Settings Control Panel -->
+        <div class="glass-panel" style="margin-bottom: 1.5rem; border-left: 4px solid #3b82f6;">
+          <div class="panel-header" style="align-items: center; flex-wrap: wrap; gap: 1rem;">
+            <div>
+              <h3 style="display: flex; align-items: center; gap: 8px;">
+                <span>⏱️</span> Scraper Sync & Cron Settings
+                <span id="cronStatusBadge" class="badge badge-active" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">ACTIVE</span>
+              </h3>
+              <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 4px;">
+                Configure schedule intervals, timeouts, and retry limits. Shows real-time last sync & next scheduled run time at a glance.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-outline" id="btnSaveSettings" title="Save Scraper & Cron Settings">💾 Save Settings</button>
+              <button class="btn btn-primary" id="btnRunCronNow" style="background: linear-gradient(135deg, #10b981, #059669); border: none;" title="Force immediate update check">
+                ⚡ Run Manual Sync Now
+              </button>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; background: rgba(0,0,0,0.2); padding: 1.25rem; border-radius: 8px; margin-top: 0.5rem; align-items: center;">
+            <div>
+              <label style="font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px;">Cron Sync Interval</label>
+              <select id="cronIntervalSelect" class="form-control" style="font-size: 0.9rem; width: 100%;">
+                <option value="12">Every 12 Hours</option>
+                <option value="24" selected>Every 24 Hours (Once Daily)</option>
+                <option value="48">Every 48 Hours</option>
+                <option value="72">Every 3 Days</option>
+              </select>
+            </div>
+
+            <div>
+              <label style="font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px;">Retry Limits (Max Retries)</label>
+              <input type="number" id="retryLimitsInput" class="form-control" value="3" min="1" max="10" style="font-size: 0.9rem; width: 100%;">
+            </div>
+
+            <div>
+              <label style="font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px;">HTTP Timeout (Seconds)</label>
+              <input type="number" id="requestTimeoutInput" class="form-control" value="30" min="5" max="120" style="font-size: 0.9rem; width: 100%;">
+            </div>
+
+            <div>
+              <label style="font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px;">Last Sync Time</label>
+              <div id="cronLastRunText" style="font-weight: 600; color: #38bdf8; font-size: 0.9rem; margin-top: 4px;">Not yet run</div>
+            </div>
+
+            <div>
+              <label style="font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px;">Next Scheduled Sync</label>
+              <div id="nextSyncText" style="font-weight: 600; color: #34d399; font-size: 0.9rem; margin-top: 4px;">Calculated on load</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+          <!-- Recent Activity Log -->
+          <div class="glass-panel">
+            <div class="panel-header">
+              <h3>Recent Scraper Activity</h3>
+            </div>
+            <div class="table-responsive">
+              <table class="custom-table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Target Source</th>
+                    <th>Status</th>
+                    <th>Scraped Count</th>
+                  </tr>
+                </thead>
+                <tbody id="recentActivityBody">
+                  <tr><td colspan="4" style="text-align:center; padding: 2rem; color: #94a3b8;">Loading activity...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Category Distribution -->
+          <div class="glass-panel">
+            <div class="panel-header">
+              <h3>Category Breakdown</h3>
+            </div>
+            <div id="categoryDistributionList">
+              <p style="color: #94a3b8; font-size: 0.9rem;">Loading categories...</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. SOURCES VIEW -->
+      <section id="view-sources" class="view-section">
+        <div class="glass-panel">
+          <div class="panel-header">
+            <div>
+              <h3>Source Management & Health Matrix</h3>
+              <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 4px;">
+                Manage target websites: Add, Edit, Enable/Disable, adjust priority order, test parser connectivity on demand, or trigger a manual sync for a specific source.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-primary" id="btnOpenAddSourceModal">➕ Add New Source</button>
+              <button class="btn btn-outline" onclick="loadSources()">⚡ Refresh Matrix</button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="custom-table">
+              <thead>
+                <tr>
+                  <th>Priority</th>
+                  <th>Website Name</th>
+                  <th>Domain / URL</th>
+                  <th>Status</th>
+                  <th>Failures</th>
+                  <th>Articles Scraped</th>
+                  <th>Last Checked</th>
+                  <th style="text-align: center;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sourcesTableBody">
+                <tr><td colspan="8" style="text-align:center; padding: 2rem; color: #94a3b8;">Loading sources matrix...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. KNOWLEDGE BANK VIEW -->
+      <section id="view-knowledge" class="view-section">
+        <div class="glass-panel">
+          <div class="panel-header">
+            <h3>Knowledge Bank Repository</h3>
+          </div>
+
+          <!-- Filter Controls Bar -->
+          <div class="filter-bar" style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.5rem; align-items: center;">
+            <input type="text" id="kbSearchInput" class="form-control" placeholder="🔍 Search Title or URL..." style="flex: 2; min-width: 200px;">
+            
+            <select id="kbCategorySelect" class="form-control" style="flex: 1; min-width: 160px;" onchange="loadKnowledgeBank(1)">
+              <option value="">All Categories</option>
+            </select>
+
+            <input type="text" id="kbAuthorityInput" class="form-control" placeholder="🏛️ Filter Authority..." style="flex: 1; min-width: 150px;">
+
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <span style="font-size: 0.8rem; color: #94a3b8;">From:</span>
+              <input type="date" id="kbDateFromInput" class="form-control" style="font-size: 0.85rem;">
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <span style="font-size: 0.8rem; color: #94a3b8;">To:</span>
+              <input type="date" id="kbDateToInput" class="form-control" style="font-size: 0.85rem;">
+            </div>
+
+            <button class="btn btn-primary" id="kbSearchBtn" onclick="loadKnowledgeBank(1)">Search</button>
+            <button class="btn btn-outline" id="kbResetBtn" onclick="resetKbFilters()">Reset</button>
+          </div>
+
+          <!-- Knowledge Bank Data Table -->
+          <div class="table-responsive">
+            <table class="custom-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Title (Scraped H1 Header)</th>
+                  <th>Authority / Category</th>
+                  <th>Attachment (PDFs)</th>
+                  <th>Collected Date</th>
+                  <th>WP Sync</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="kbTableBody">
+                <tr><td colspan="7" style="text-align:center; padding: 2rem; color: #94a3b8;">Loading repository data...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination Bar -->
+          <div class="pagination-wrapper">
+            <div id="kbPaginationInfo" style="font-size: 0.88rem; color: #94a3b8;">Showing page 1</div>
+            <div id="kbPaginationControls" style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. EXECUTION LOGS VIEW -->
+      <section id="view-logs" class="view-section">
+        <div class="glass-panel">
+          <div class="panel-header" style="flex-wrap: wrap; gap: 1rem;">
+            <div>
+              <h3>Background Scraper Execution Logs</h3>
+              <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 4px;">
+                Detailed per-run logs displaying items scraped, newly added, content updated, duplicates/unchanged, and error messages.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select id="logStatusFilter" class="form-control" onchange="loadLogs(1)">
+                <option value="">All Statuses</option>
+                <option value="SUCCESS">SUCCESS</option>
+                <option value="FAILOVER">FAILOVER</option>
+                <option value="FAILED">FAILED</option>
+                <option value="STARTED">STARTED</option>
+              </select>
+              <button class="btn btn-outline" onclick="loadLogs(1)">🔄 Refresh Logs</button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="custom-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Target Source</th>
+                  <th>Status</th>
+                  <th>New Added</th>
+                  <th>Updated</th>
+                  <th>Duplicates</th>
+                  <th>Total Scraped</th>
+                  <th>Log Details & Errors</th>
+                </tr>
+              </thead>
+              <tbody id="logsTableBody">
+                <tr><td colspan="8" style="text-align:center; padding: 2rem; color: #94a3b8;">Loading execution logs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Log Pagination Bar -->
+          <div class="pagination-wrapper">
+            <div id="logPaginationInfo" style="font-size: 0.88rem; color: #94a3b8;">Showing page 1</div>
+            <div id="logPaginationControls" style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- HTML & Sub-pages Viewer Modal -->
+  <div class="modal-overlay" id="modalViewer">
+    <div class="modal-container">
+      <div class="modal-header">
+        <div class="modal-title" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+          <h3 id="modalViewerTitle" style="font-size: 1.25rem;">Knowledge Bank Item Detail</h3>
+          <span id="modalViewerCategory" class="badge badge-category">Category</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <a id="btnLiveWebsite" href="#" target="_blank" class="btn btn-primary" style="padding: 0.45rem 0.9rem; font-size: 0.85rem; text-decoration: none;">
+            🌐 View Live Website
+          </a>
+          <button class="modal-close" id="modalClose">✕</button>
+        </div>
+      </div>
+
+      <div class="modal-tabs" id="modalViewerTabs"></div>
+
+      <div class="modal-body">
+        <iframe class="viewer-iframe" id="viewerFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- Source Add/Edit Modal -->
+  <div class="modal-overlay" id="modalSourceForm">
+    <div class="modal-container" style="max-width: 550px; height: auto; padding: 0;">
+      <div class="modal-header">
+        <h3 id="modalSourceFormTitle">Add New Source</h3>
+        <button class="modal-close" onclick="closeSourceModal()">✕</button>
+      </div>
+      <form id="sourceForm" style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+        <input type="hidden" id="sourceFormId" value="0">
+
+        <div>
+          <label style="font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 4px;">Website Name *</label>
+          <input type="text" id="sourceFormName" class="form-control" placeholder="e.g. SCA & Associates" required style="width: 100%;">
+        </div>
+
+        <div>
+          <label style="font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 4px;">Domain *</label>
+          <input type="text" id="sourceFormDomain" class="form-control" placeholder="e.g. scaca.in" required style="width: 100%;">
+        </div>
+
+        <div>
+          <label style="font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 4px;">Target URL *</label>
+          <input type="url" id="sourceFormUrl" class="form-control" placeholder="e.g. https://scaca.in/" required style="width: 100%;">
+        </div>
+
+        <div style="display: flex; gap: 1rem;">
+          <div style="flex: 1;">
+            <label style="font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 4px;">Priority (0 = High)</label>
+            <input type="number" id="sourceFormPriority" class="form-control" value="10" min="0" max="99" style="width: 100%;">
+          </div>
+
+          <div style="flex: 1;">
+            <label style="font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 4px;">Initial Status</label>
+            <select id="sourceFormStatus" class="form-control" style="width: 100%;">
+              <option value="ACTIVE">ACTIVE</option>
+              <option value="DISABLED">DISABLED</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 0.5rem;">
+          <input type="checkbox" id="sourceFormIsPrimary" style="width: 18px; height: 18px;">
+          <label for="sourceFormIsPrimary" style="font-size: 0.88rem; color: #f8fafc;">Mark as Primary Source Target</label>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-outline" onclick="closeSourceModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSaveSource">Save Source</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Source Connectivity Test Result Modal -->
+  <div class="modal-overlay" id="modalTestResult">
+    <div class="modal-container" style="max-width: 600px; height: auto; padding: 0;">
+      <div class="modal-header">
+        <h3 id="modalTestResultTitle">Source Parser & Health Test</h3>
+        <button class="modal-close" onclick="closeTestModal()">✕</button>
+      </div>
+      <div id="modalTestResultBody" style="padding: 1.5rem; font-size: 0.95rem;">
+        <p style="color: #94a3b8;">Testing connectivity and running parser check...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log Details Modal -->
+  <div class="modal-overlay" id="modalLogDetails">
+    <div class="modal-container" style="max-width: 800px; height: 80vh; padding: 0;">
+      <div class="modal-header">
+        <h3>Execution Log & Stack Trace</h3>
+        <button class="modal-close" onclick="closeLogModal()">✕</button>
+      </div>
+      <div style="padding: 1.5rem; overflow-y: auto; flex: 1;">
+        <pre id="logModalContent" style="background: rgba(0,0,0,0.4); padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.85rem; color: #38bdf8; white-space: pre-wrap; word-break: break-all;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
