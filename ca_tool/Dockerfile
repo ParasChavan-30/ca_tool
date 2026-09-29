@@ -1,15 +1,14 @@
-FROM php:8.2-apache
+FROM php:8.2-cli
 
 # Install PDO MySQL extension
 RUN docker-php-ext-install pdo pdo_mysql
 
-# Enable Apache rewrite module
-RUN a2enmod rewrite
+# Copy project files
+WORKDIR /var/www/html
+COPY . .
 
-# Change Apache default listening port to 8080
-RUN sed -i 's/80/8080/g' /etc/apache2/ports.conf /etc/apache2/sites-available/000-default.conf
-
-# Copy all project files into Apache web root
-COPY . /var/www/html/
-
+# Expose port 8080
 EXPOSE 8080
+
+# Run PHP built-in web server listening on 0.0.0.0:8080
+CMD ["php", "-S", "0.0.0.0:8080"]
