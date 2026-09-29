@@ -49,8 +49,9 @@ try {
         $forceFlag = (isset($_GET['force']) && ($_GET['force'] === 'true' || $_GET['force'] === '1')) ? ' --force' : '';
         $idFlag = isset($_GET['id']) ? ' --id=' . (int)$_GET['id'] : '';
 
+        $pythonBin = getPythonCmd();
         // Execute python script with limit
-        $cmd = 'python ' . escapeshellarg($syncScript) . ' --limit=' . $limit . $forceFlag . $idFlag;
+        $cmd = $pythonBin . ' ' . escapeshellarg($syncScript) . ' --limit=' . $limit . $forceFlag . $idFlag;
         $rawOutput = shell_exec($cmd . ' 2>&1');
         
         $parsedOutput = null;
@@ -110,7 +111,8 @@ try {
 
     if ($action === 'test_connection') {
         $syncScript = realpath(__DIR__ . '/../scraper/wp_sync.py');
-        $cmd = 'python -c "import logging; logging.basicConfig(level=logging.INFO); from scraper.wp_sync import WordPressSyncEngine; print(WordPressSyncEngine().test_connection())"';
+        $pythonBin = getPythonCmd();
+        $cmd = $pythonBin . ' -c "import logging; logging.basicConfig(level=logging.INFO); from scraper.wp_sync import WordPressSyncEngine; print(WordPressSyncEngine().test_connection())"';
         $output = shell_exec($cmd . ' 2>&1');
 
         echo json_encode([
