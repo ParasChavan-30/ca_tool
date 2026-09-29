@@ -186,7 +186,8 @@ try {
 
     if ($action === 'ping_all') {
         // Run health check via python rotator
-        $cmd = 'python ' . escapeshellarg(__DIR__ . '/../scraper/runner.py') . ' --once';
+        $pythonBin = getPythonCmd();
+        $cmd = $pythonBin . ' ' . escapeshellarg(__DIR__ . '/../scraper/runner.py') . ' --once';
         exec($cmd);
     }
 
