@@ -1,3 +1,15 @@
+async function safeFetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        const doc = new DOMParser().parseFromString(text, 'text/html');
+        const stripped = doc.body ? doc.body.textContent.trim() : text.replace(/<[^>]*>?/gm, '').trim();
+        throw new Error(stripped || `Server returned non-JSON output (Status ${res.status})`);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Navigation Router
     const navButtons = document.querySelectorAll('.nav-item button');
