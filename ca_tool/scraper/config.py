@@ -13,14 +13,14 @@ import json
 for folder in [STORAGE_DIR, DB_DIR, PDF_DIR, LOG_DIR]:
     os.makedirs(folder, exist_ok=True)
 
-# Database Configuration (MySQL XAMPP & SQLite fallback)
+# Database Configuration (MySQL XAMPP, Railway & SQLite fallback)
 USE_MYSQL = True
 MYSQL_CONFIG = {
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "port": int(os.getenv("DB_PORT", 3307)),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASS", ""),
-    "database": os.getenv("DB_NAME", "catool_db"),
+    "host": os.getenv("MYSQLHOST", os.getenv("DB_HOST", "127.0.0.1")),
+    "port": int(os.getenv("MYSQLPORT", os.getenv("DB_PORT", 3307))),
+    "user": os.getenv("MYSQLUSER", os.getenv("DB_USER", "root")),
+    "password": os.getenv("MYSQLPASSWORD", os.getenv("DB_PASS", os.getenv("DB_PASSWORD", ""))),
+    "database": os.getenv("MYSQLDATABASE", os.getenv("DB_NAME", "railway")),
     "charset": "utf8mb4"
 }
 
