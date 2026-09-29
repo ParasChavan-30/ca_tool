@@ -9,5 +9,6 @@ RUN a2enmod rewrite
 # Copy all project files into Apache web root
 COPY . /var/www/html/
 
-# Expose port 80 (Railway will map $PORT automatically)
-EXPOSE 80
+# Dynamically set Apache port to Railway $PORT and launch Apache
+CMD sed -i "s/80/${PORT:-80}/g" /etc/apache2/ports.conf /etc/apache2/sites-available/*.conf && apache2-foreground
+
