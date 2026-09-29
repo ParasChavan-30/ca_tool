@@ -340,8 +340,7 @@ async function checkScraperStatus() {
     isStatusChecking = true;
 
     try {
-        const res = await fetch('api/scraper_control.php?action=status');
-        const data = await res.json();
+        const data = await safeFetchJson('api/scraper_control.php?action=status');
         if (!data.success) return;
 
         const badge = document.getElementById('scraperStatusBadge');
@@ -381,8 +380,7 @@ async function loadOverview() {
     isOverviewLoading = true;
 
     try {
-        const res = await fetch('api/overview.php');
-        const data = await res.json();
+        const data = await safeFetchJson('api/overview.php');
         if (!data.success) return;
 
         const stats = data.data;
