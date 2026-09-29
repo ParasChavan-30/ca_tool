@@ -11,20 +11,22 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'OPTIONS
 
 function getDBConnection() {
     $configFile = __DIR__ . '/../db_config.json';
-    $host = '127.0.0.1';
-    $port = 3307;
-    $db = 'catool_db';
-    $user = 'root';
-    $pass = '';
+    
+    // Check Environment Variables first (for Railway / production cloud deployment)
+    $host = getenv('MYSQLHOST') ?: (getenv('DB_HOST') ?: '127.0.0.1');
+    $port = getenv('MYSQLPORT') ?: (getenv('DB_PORT') ?: 3307);
+    $db   = getenv('MYSQLDATABASE') ?: (getenv('DB_NAME') ?: 'catool_db');
+    $user = getenv('MYSQLUSER') ?: (getenv('DB_USER') ?: 'root');
+    $pass = getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : (getenv('DB_PASS') !== false ? getenv('DB_PASS') : '');
 
     if (file_exists($configFile)) {
         $cfg = json_decode(file_get_contents($configFile), true);
         if ($cfg && is_array($cfg)) {
-            $host = $cfg['host'] ?? $host;
-            $port = $cfg['port'] ?? $port;
-            $db = $cfg['database'] ?? $db;
-            $user = $cfg['user'] ?? $user;
-            $pass = $cfg['password'] ?? $pass;
+            if (!empty($cfg['host']) && !getenv('MYSQLHOST')) $host = $cfg['host'];
+            if (!empty($cfg['port']) && !getenv('MYSQLPORT')) $port = $cfg['port'];
+            if (!empty($cfg['database']) && !getenv('MYSQLDATABASE')) $db = $cfg['database'];
+            if (!empty($cfg['user']) && !getenv('MYSQLUSER')) $user = $cfg['user'];
+            if (isset($cfg['password']) && !getenv('MYSQLPASSWORD')) $pass = $cfg['password'];
         }
     }
 
