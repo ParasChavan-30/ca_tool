@@ -9,24 +9,65 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'OPTIONS
     exit();
 }
 
+function getPythonCmd() {
+    if (getenv('PYTHON_PATH')) {
+        return getenv('PYTHON_PATH');
+    }
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        return 'python';
+    }
+    $output = @shell_exec('which python3 2>/dev/null');
+    if ($output && trim($output) !== '') {
+        return trim($output);
+    }
+    return 'python3';
+}
+
 function getDBConnection() {
     $configFile = __DIR__ . '/../db_config.json';
     
-    // Check Environment Variables first (for Railway / production cloud deployment)
-    $host = getenv('MYSQLHOST') ?: (getenv('DB_HOST') ?: '127.0.0.1');
-    $port = getenv('MYSQLPORT') ?: (getenv('DB_PORT') ?: 3307);
-    $db   = getenv('MYSQLDATABASE') ?: (getenv('DB_NAME') ?: 'catool_db');
-    $user = getenv('MYSQLUSER') ?: (getenv('DB_USER') ?: 'root');
-    $pass = getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : (getenv('DB_PASS') !== false ? getenv('DB_PASS') : '');
+    // Default fallback values
+    $host = '127.0.0.1';
+    $port = 3306;
+    $db   = 'catool_db';
+    $user = 'root';
+    $pass = '';
 
-    if (file_exists($configFile)) {
-        $cfg = json_decode(file_get_contents($configFile), true);
-        if ($cfg && is_array($cfg)) {
-            if (!empty($cfg['host']) && !getenv('MYSQLHOST')) $host = $cfg['host'];
-            if (!empty($cfg['port']) && !getenv('MYSQLPORT')) $port = $cfg['port'];
-            if (!empty($cfg['database']) && !getenv('MYSQLDATABASE')) $db = $cfg['database'];
-            if (!empty($cfg['user']) && !getenv('MYSQLUSER')) $user = $cfg['user'];
-            if (isset($cfg['password']) && !getenv('MYSQLPASSWORD')) $pass = $cfg['password'];
+    // Check DATABASE_URL or MYSQL_URL first (Railway / Heroku style)
+    $dbUrl = getenv('DATABASE_URL') ?: (getenv('MYSQL_URL') ?: getenv('MYSQL_PRIVATE_URL'));
+    if ($dbUrl && strpos($dbUrl, 'mysql://') === 0) {
+        $parsed = parse_url($dbUrl);
+        if ($parsed) {
+            $host = $parsed['host'] ?? $host;
+            $port = $parsed['port'] ?? $port;
+            $user = $parsed['user'] ?? $user;
+            $pass = $parsed['pass'] ?? $pass;
+            $db   = isset($parsed['path']) ? ltrim($parsed['path'], '/') : $db;
+        }
+    } else {
+        // Check explicit environment variables
+        $envHost = getenv('MYSQLHOST') ?: (getenv('MYSQL_HOST') ?: getenv('DB_HOST'));
+        $envPort = getenv('MYSQLPORT') ?: (getenv('MYSQL_PORT') ?: getenv('DB_PORT'));
+        $envDb   = getenv('MYSQLDATABASE') ?: (getenv('MYSQL_DATABASE') ?: getenv('DB_NAME'));
+        $envUser = getenv('MYSQLUSER') ?: (getenv('MYSQL_USER') ?: getenv('DB_USER'));
+        $envPass = getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : (getenv('MYSQL_PASSWORD') !== false ? getenv('MYSQL_PASSWORD') : (getenv('DB_PASS') !== false ? getenv('DB_PASS') : null));
+
+        if ($envHost) {
+            $host = $envHost;
+            if ($envPort) $port = $envPort;
+            if ($envDb)   $db   = $envDb;
+            if ($envUser) $user = $envUser;
+            if ($envPass !== null) $pass = $envPass;
+        } else if (file_exists($configFile)) {
+            // Fallback to db_config.json only if environment variables are not set
+            $cfg = json_decode(file_get_contents($configFile), true);
+            if ($cfg && is_array($cfg)) {
+                if (!empty($cfg['host'])) $host = $cfg['host'];
+                if (!empty($cfg['port'])) $port = $cfg['port'];
+                if (!empty($cfg['database'])) $db = $cfg['database'];
+                if (!empty($cfg['user'])) $user = $cfg['user'];
+                if (isset($cfg['password'])) $pass = $cfg['password'];
+            }
         }
     }
 
@@ -39,6 +80,28 @@ function getDBConnection() {
         
         static $migrated = false;
         if (!$migrated) {
+            // 1. Auto-Initialize Database Schema if sources table missing
+            try {
+                $check = $pdo->query("SHOW TABLES LIKE 'sources'");
+                if ($check->rowCount() === 0) {
+                    $schemaFile = __DIR__ . '/../schema.sql';
+                    if (file_exists($schemaFile)) {
+                        $sql = file_get_contents($schemaFile);
+                        $sqlClean = preg_replace('/--.*$/m', '', $sql);
+                        $queries = explode(';', $sqlClean);
+                        foreach ($queries as $query) {
+                            $query = trim($query);
+                            if (!empty($query)) {
+                                try {
+                                    $pdo->exec($query);
+                                } catch (Exception $e) {}
+                            }
+                        }
+                    }
+                }
+            } catch (Exception $e) {}
+
+            // 2. Incremental Migrations
             try {
                 $pdo->exec("ALTER TABLE sources ADD COLUMN failure_count INT DEFAULT 0;");
             } catch (Exception $e) {}
@@ -77,3 +140,4 @@ function getDBConnection() {
         exit();
     }
 }
+
