@@ -9,6 +9,7 @@ RUN a2enmod rewrite
 # Copy all project files into Apache web root
 COPY . /var/www/html/
 
-# Dynamically set Apache port to Railway $PORT and launch Apache
-CMD sed -i "s/80/${PORT:-80}/g" /etc/apache2/ports.conf /etc/apache2/sites-available/*.conf && apache2-foreground
+# Rebind Apache port specifically to Railway $PORT
+CMD sh -c "PORT=\${PORT:-80} && sed -i \"s/Listen 80/Listen \$PORT/g\" /etc/apache2/ports.conf && sed -i \"s/<VirtualHost \*:80>/<VirtualHost \*:\$PORT>/g\" /etc/apache2/sites-available/000-default.conf && apache2-foreground"
+
 
