@@ -8,18 +8,20 @@ if (!$lockFile) {
 
 $action = $_GET['action'] ?? 'status';
 
-function getPythonCmd() {
-    if (getenv('PYTHON_PATH')) {
-        return getenv('PYTHON_PATH');
+if (!function_exists('getPythonCmd')) {
+    function getPythonCmd() {
+        if (getenv('PYTHON_PATH')) {
+            return getenv('PYTHON_PATH');
+        }
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            return 'python';
+        }
+        $output = @shell_exec('which python3 2>/dev/null');
+        if ($output && trim($output) !== '') {
+            return trim($output);
+        }
+        return 'python3';
     }
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        return 'python';
-    }
-    $output = @shell_exec('which python3 2>/dev/null');
-    if ($output && trim($output) !== '') {
-        return trim($output);
-    }
-    return 'python3';
 }
 
 function isPidRunning($pid) {
