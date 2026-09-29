@@ -13,29 +13,72 @@ import json
 for folder in [STORAGE_DIR, DB_DIR, PDF_DIR, LOG_DIR]:
     os.makedirs(folder, exist_ok=True)
 
+from urllib.parse import urlparse
+
 # Database Configuration (MySQL XAMPP, Railway & SQLite fallback)
 USE_MYSQL = True
-MYSQL_CONFIG = {
-    "host": os.getenv("MYSQLHOST", os.getenv("DB_HOST", "127.0.0.1")),
-    "port": int(os.getenv("MYSQLPORT", os.getenv("DB_PORT", 3307))),
-    "user": os.getenv("MYSQLUSER", os.getenv("DB_USER", "root")),
-    "password": os.getenv("MYSQLPASSWORD", os.getenv("DB_PASS", os.getenv("DB_PASSWORD", ""))),
-    "database": os.getenv("MYSQLDATABASE", os.getenv("DB_NAME", "railway")),
-    "charset": "utf8mb4"
-}
 
-CONFIG_FILE = os.path.join(BASE_DIR, "db_config.json")
-if os.path.exists(CONFIG_FILE):
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            if "host" in cfg and cfg["host"]: MYSQL_CONFIG["host"] = cfg["host"]
-            if "port" in cfg and cfg["port"]: MYSQL_CONFIG["port"] = int(cfg["port"])
-            if "user" in cfg and cfg["user"]: MYSQL_CONFIG["user"] = cfg["user"]
-            if "password" in cfg: MYSQL_CONFIG["password"] = cfg["password"]
-            if "database" in cfg and cfg["database"]: MYSQL_CONFIG["database"] = cfg["database"]
-    except Exception:
-        pass
+def _get_db_config():
+    # 1. Check DATABASE_URL or MYSQL_URL first
+    db_url = os.getenv("DATABASE_URL") or os.getenv("MYSQL_URL") or os.getenv("MYSQL_PRIVATE_URL")
+    if db_url and db_url.startswith("mysql://"):
+        try:
+            parsed = urlparse(db_url)
+            return {
+                "host": parsed.hostname or "127.0.0.1",
+                "port": parsed.port or 3306,
+                "user": parsed.username or "root",
+                "password": parsed.password or "",
+                "database": parsed.path.lstrip("/") or "railway",
+                "charset": "utf8mb4"
+            }
+        except Exception:
+            pass
+
+    # 2. Check explicit environment variables
+    env_host = os.getenv("MYSQLHOST") or os.getenv("MYSQL_HOST") or os.getenv("DB_HOST")
+    env_port = os.getenv("MYSQLPORT") or os.getenv("MYSQL_PORT") or os.getenv("DB_PORT")
+    env_user = os.getenv("MYSQLUSER") or os.getenv("MYSQL_USER") or os.getenv("DB_USER")
+    env_pass = os.getenv("MYSQLPASSWORD") if os.getenv("MYSQLPASSWORD") is not None else (os.getenv("MYSQL_PASSWORD") if os.getenv("MYSQL_PASSWORD") is not None else os.getenv("DB_PASS", os.getenv("DB_PASSWORD")))
+    env_db = os.getenv("MYSQLDATABASE") or os.getenv("MYSQL_DATABASE") or os.getenv("DB_NAME")
+
+    if env_host:
+        return {
+            "host": env_host,
+            "port": int(env_port) if env_port else 3306,
+            "user": env_user or "root",
+            "password": env_pass if env_pass is not None else "",
+            "database": env_db or "railway",
+            "charset": "utf8mb4"
+        }
+
+    # 3. Fallback to db_config.json for local development
+    config_file = os.path.join(BASE_DIR, "db_config.json")
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                return {
+                    "host": cfg.get("host", "127.0.0.1"),
+                    "port": int(cfg.get("port", 3306)),
+                    "user": cfg.get("user", "root"),
+                    "password": cfg.get("password", ""),
+                    "database": cfg.get("database", "catool_db"),
+                    "charset": "utf8mb4"
+                }
+        except Exception:
+            pass
+
+    return {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "root",
+        "password": "",
+        "database": "catool_db",
+        "charset": "utf8mb4"
+    }
+
+MYSQL_CONFIG = _get_db_config()
 
 DB_PATH = os.path.join(DB_DIR, "ca_knowledge.db")
 LOCK_FILE = os.path.join(STORAGE_DIR, "scraper.lock")
