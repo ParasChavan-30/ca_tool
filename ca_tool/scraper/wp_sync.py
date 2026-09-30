@@ -218,9 +218,98 @@ class WordPressSyncEngine:
                 return match.group(1).strip()
         return "N/A"
 
+    def find_existing_wp_post(self, item):
+        """
+        Queries remote WordPress REST API to check if this knowledge entry has already been posted.
+        Checks by matching:
+        1. acf.source_url or source_url field
+        2. acf.notification_number field
+        3. Post title / slug
+        Returns remote WordPress post ID (int) if found, otherwise None.
+        """
+        if not self.is_configured():
+            return None
+
+        source_url = (item.get("source_url") or "").strip()
+        title = (item.get("title") or "").strip()
+        notif_num = (item.get("notification_number") or "").strip()
+
+        search_terms = []
+
+        # 1. Search term: Notification Number (if present & valid)
+        if notif_num and notif_num.upper() not in ["N/A", "NONE", ""]:
+            search_terms.append(notif_num)
+
+        # 2. Search term: Title snippet
+        if title:
+            search_terms.append(title[:60])
+
+        # 3. Search term: Source URL
+        if source_url:
+            search_terms.append(source_url)
+
+        tested_ids = set()
+
+        for term in search_terms:
+            if not term:
+                continue
+            try:
+                url = f"{self.base_url}/wp-json/wp/v2/{self.post_type}"
+                params = {"search": term, "per_page": 20}
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+                if resp.status_code == 200:
+                    posts = resp.json()
+                    if isinstance(posts, list):
+                        for post in posts:
+                            p_id = post.get("id")
+                            if not p_id or p_id in tested_ids:
+                                continue
+                            tested_ids.add(p_id)
+
+                            p_acf = post.get("acf") or {}
+                            p_title_obj = post.get("title") or {}
+                            p_title = p_title_obj.get("rendered", "") if isinstance(p_title_obj, dict) else str(p_title_obj)
+
+                            clean_p_title = BeautifulSoup(p_title, "html.parser").get_text().strip()
+
+                            # Match 1: source_url in ACF fields
+                            wp_src = (p_acf.get("source_url") or "").strip()
+                            if source_url and wp_src and (wp_src == source_url or wp_src.rstrip('/') == source_url.rstrip('/')):
+                                logger.info(f"Duplicate Check: Found existing remote WP Post ID {p_id} matching source_url '{source_url}'")
+                                return p_id
+
+                            # Match 2: notification_number in ACF fields
+                            wp_notif = (p_acf.get("notification_number") or "").strip()
+                            if notif_num and wp_notif and notif_num.upper() not in ["N/A", "NONE", ""] and wp_notif.upper() not in ["N/A", "NONE", ""]:
+                                if notif_num.lower() == wp_notif.lower():
+                                    logger.info(f"Duplicate Check: Found existing remote WP Post ID {p_id} matching notification_number '{notif_num}'")
+                                    return p_id
+
+                            # Match 3: Title comparison
+                            if title and clean_p_title:
+                                norm_local = re.sub(r'\s+', ' ', title.lower().strip())
+                                norm_remote = re.sub(r'\s+', ' ', clean_p_title.lower().strip())
+                                if norm_local == norm_remote or (len(norm_local) > 15 and norm_local in norm_remote):
+                                    logger.info(f"Duplicate Check: Found existing remote WP Post ID {p_id} matching title '{title[:40]}'")
+                                    return p_id
+            except Exception as e:
+                logger.warning(f"Error querying WP REST API for duplicate check term '{term}': {e}")
+
+        return None
+
     def sync_item(self, item):
         """Syncs or updates a single knowledge entry to the remote WordPress ACF Post Type."""
         wp_post_id = item.get("wp_post_id")
+
+        # Step 0: Pre-check duplicate check against WordPress REST API if wp_post_id is not set locally
+        if not wp_post_id:
+            existing_wp_id = self.find_existing_wp_post(item)
+            if existing_wp_id:
+                wp_post_id = existing_wp_id
+                # Link existing WP Post ID to local DB record
+                self.db.update_wp_sync_status(item["id"], existing_wp_id)
+                logger.info(f"Matched existing WP Post ID {existing_wp_id} for KB Item #{item['id']}. Preventing duplicate creation, updating existing post.")
+
         if wp_post_id:
             post_url = f"{self.base_url}/wp-json/wp/v2/{self.post_type}/{wp_post_id}"
         else:
