@@ -75,7 +75,7 @@ if ($action === 'start') {
                 'sid' => $sourceId > 0 ? $sourceId : null,
                 'msg' => "Scraper process manually STARTED by user via Dashboard {$targetText}."
             ]);
-    } catch (Exception $e) {}1
+    } catch (Exception $e) {}
 
     $pythonBin = getPythonCmd();
     $modeFlag = $sourceId > 0 ? " --once --source-id {$sourceId}" : " --continuous";
