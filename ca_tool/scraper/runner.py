@@ -173,9 +173,90 @@ def run_scraper_job(is_cron=False, force=False, target_source_id=None):
         )
         return False
 
+def run_continuous_single_source_job():
+    """
+    Continuously scrapes ONLY 1 active website (Primary first).
+    If the active website goes down, automatically rotates to the next backup site.
+    """
+    db = DatabaseManager()
+    rotator = SourceRotator(db)
+    crawler = WebsiteCrawler(db)
+    
+    logger.info("==================================================")
+    logger.info("Starting Continuous Single-Source Priority Scraper")
+    logger.info("==================================================")
+    
+    while True:
+        # Step 1: Probe health & pick highest priority online site (Primary or Backup failover)
+        active_source, failover_logs = rotator.get_active_scraping_source()
+        log_summary = "\n".join(failover_logs) if failover_logs else ""
+        
+        if not active_source:
+            logger.error("All CA target websites are unreachable. Retrying in 60s...")
+            db.add_execution_log(
+                source_id=None,
+                status="FAILED",
+                items_scraped=0,
+                log_details=log_summary,
+                error_message="All CA target websites are unreachable."
+            )
+            time.sleep(60)
+            continue
+            
+        logger.info(f"Scraping active target site: {active_source['name']} ({active_source['domain']})...")
+        source_id = active_source["id"]
+        status_flag = "SUCCESS" if active_source.get("is_primary") else "FAILOVER"
+        
+        # Step 2: Execute crawl pass on THIS single active site
+        try:
+            scraped_count, crawl_summary, metrics = crawler.scrape_source(active_source)
+            logger.info(f"Crawl pass completed for {active_source['name']}. Scraped: {scraped_count}")
+            full_log_details = f"{log_summary}\n{crawl_summary}" if log_summary else crawl_summary
+
+            # Step 3: Automatic WordPress Sync batch for any remaining unsynced items
+            wp_posts_updated = 0
+            try:
+                logger.info("Running automatic WordPress sync batch for remaining unsynced items...")
+                from scraper.wp_sync import WordPressSyncEngine
+                wp_engine = WordPressSyncEngine(db_manager=db)
+                if wp_engine.is_configured():
+                    sync_res = wp_engine.sync_batch(limit=500)
+                    wp_posts_updated = sync_res.get("synced_count", 0)
+                    logger.info(f"Auto WP Sync summary: {wp_posts_updated} items synced, {sync_res.get('failed_count', 0)} failed, {sync_res.get('total_pending', 0)} pending.")
+            except Exception as wp_err:
+                logger.warning(f"Post-scraper job WP Sync error: {wp_err}")
+
+            # Step 4: Record execution log with detailed delta metrics
+            db.add_execution_log(
+                source_id=source_id,
+                status=status_flag,
+                items_scraped=scraped_count,
+                items_added=metrics.get("added", 0),
+                items_updated=metrics.get("updated", 0),
+                items_unchanged=metrics.get("unchanged", 0),
+                wp_posts_updated=wp_posts_updated,
+                log_details=full_log_details,
+                error_message=None
+            )
+        except Exception as e:
+            err_msg = f"Crawl error on {active_source['name']}: {e}"
+            logger.error(err_msg, exc_info=True)
+            db.add_execution_log(
+                source_id=source_id,
+                status="FAILED",
+                items_scraped=0,
+                log_details=log_summary,
+                error_message=err_msg
+            )
+        
+        # Step 5: Pause briefly before next continuous update check on active site
+        logger.info("Waiting 30 seconds before next continuous update pass...")
+        time.sleep(30)
+
 def main():
     parser = argparse.ArgumentParser(description="CA Knowledge Bank Scraper & Background Job Runner")
     parser.add_argument("--background", action="store_true", help="Launch scraper job as an asynchronous background process")
+    parser.add_argument("--continuous", action="store_true", help="Run continuous single-source scraping loop")
     parser.add_argument("--once", action="store_true", help="Run scraper job once synchronously")
     parser.add_argument("--cron", action="store_true", help="Run in daily cron updater mode with interval check")
     parser.add_argument("--force", action="store_true", help="Force cron execution regardless of interval")
@@ -184,7 +265,8 @@ def main():
 
     if args.background:
         # Launch non-blocking background process
-        cmd = [sys.executable, __file__, "--cron" if args.cron else "--once"]
+        mode_flag = "--continuous" if args.continuous or (not args.once and not args.cron) else ("--cron" if args.cron else "--once")
+        cmd = [sys.executable, __file__, mode_flag]
         if args.force:
             cmd.append("--force")
         if args.source_id:
@@ -204,10 +286,14 @@ def main():
         sys.exit(1)
 
     try:
-        run_scraper_job(is_cron=args.cron, force=args.force, target_source_id=args.source_id)
+        if args.continuous or (not args.once and not args.cron and not args.source_id):
+            run_continuous_single_source_job()
+        else:
+            run_scraper_job(is_cron=args.cron, force=args.force, target_source_id=args.source_id)
     finally:
         lock.release()
 
 if __name__ == "__main__":
     main()
+
 
