@@ -75,15 +75,15 @@ if ($action === 'start') {
                 'sid' => $sourceId > 0 ? $sourceId : null,
                 'msg' => "Scraper process manually STARTED by user via Dashboard {$targetText}."
             ]);
-    } catch (Exception $e) {}
+    } catch (Exception $e) {}1
 
     $pythonBin = getPythonCmd();
-    $extraArgs = $sourceId > 0 ? " --source-id {$sourceId}" : "";
+    $modeFlag = $sourceId > 0 ? " --once --source-id {$sourceId}" : " --continuous";
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $cmd = 'start /B "" ' . $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --once' . $extraArgs;
+        $cmd = 'start /B "" ' . $pythonBin . ' ' . escapeshellarg($runnerScript) . $modeFlag;
         pclose(popen($cmd, "r"));
     } else {
-        $cmd = $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --once' . $extraArgs . ' > /dev/null 2>&1 &';
+        $cmd = $pythonBin . ' ' . escapeshellarg($runnerScript) . $modeFlag . ' > /dev/null 2>&1 &';
         exec($cmd);
     }
 
@@ -111,10 +111,10 @@ if ($action === 'resume') {
 
     $pythonBin = getPythonCmd();
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $cmd = 'start /B "" ' . $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --once';
+        $cmd = 'start /B "" ' . $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --continuous';
         pclose(popen($cmd, "r"));
     } else {
-        $cmd = $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --once > /dev/null 2>&1 &';
+        $cmd = $pythonBin . ' ' . escapeshellarg($runnerScript) . ' --continuous > /dev/null 2>&1 &';
         exec($cmd);
     }
 
