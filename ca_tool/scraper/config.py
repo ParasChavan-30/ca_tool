@@ -145,3 +145,32 @@ WP_CONFIG = {
     "batch_size": 25
 }
 
+# Webshare HTTP Proxies List
+PROXIES_LIST = [
+    "http://sjpmxmld:bmmmttzivw7p@31.59.20.176:6754",
+    "http://sjpmxmld:bmmmttzivw7p@45.38.107.97:6014",
+    "http://sjpmxmld:bmmmttzivw7p@64.137.96.74:6641",
+    "http://sjpmxmld:bmmmttzivw7p@198.23.243.226:6361",
+    "http://sjpmxmld:bmmmttzivw7p@38.154.185.97:6370",
+    "http://sjpmxmld:bmmmttzivw7p@84.247.60.125:6095",
+    "http://sjpmxmld:bmmmttzivw7p@142.111.67.146:5611",
+    "http://sjpmxmld:bmmmttzivw7p@191.96.254.138:6185",
+    "http://sjpmxmld:bmmmttzivw7p@31.58.9.4:6077",
+    "http://sjpmxmld:bmmmttzivw7p@198.46.161.42:5092"
+]
+
+USE_PROXIES = os.getenv("USE_PROXIES", "1").lower() in ["1", "true", "yes"]
+
+import random
+
+def get_proxy_dict():
+    """Returns a requests-compatible proxies dictionary with a randomly rotated proxy from PROXIES_LIST, or None if disabled."""
+    if not USE_PROXIES or not PROXIES_LIST:
+        return None
+    proxy_url = random.choice(PROXIES_LIST)
+    return {
+        "http": proxy_url,
+        "https": proxy_url
+    }
+
+
