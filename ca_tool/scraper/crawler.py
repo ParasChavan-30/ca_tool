@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scraper.config import HTTP_HEADERS, REQUEST_TIMEOUT, MAX_SUBPAGES_PER_ITEM, MAX_WORKERS, DISCOVERY_KEYWORDS, MAX_CRAWL_DEPTH
+from scraper.config import HTTP_HEADERS, REQUEST_TIMEOUT, MAX_SUBPAGES_PER_ITEM, MAX_WORKERS, DISCOVERY_KEYWORDS, MAX_CRAWL_DEPTH, get_proxy_dict
 from scraper.extractor import DataExtractor
 from scraper.db_manager import DatabaseManager
 from scraper.wp_sync import WordPressSyncEngine
@@ -101,7 +101,8 @@ class WebsiteCrawler:
         """Scrapes a single Knowledge Bank page, its attachments, subpages, and discovers child links using delta hashing."""
         try:
             logger.info(f"Scraping Knowledge Bank page: {url}")
-            page_resp = session.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT)
+            proxy = get_proxy_dict()
+            page_resp = session.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, proxies=proxy)
             if page_resp.status_code != 200:
                 logger.warning(f"Skipping {url} - HTTP {page_resp.status_code}")
                 return False, [], "FAILED"
@@ -206,7 +207,8 @@ class WebsiteCrawler:
 
         # Step 2: Fetch Home / Portal Page
         try:
-            resp = session.get(base_url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT)
+            proxy = get_proxy_dict()
+            resp = session.get(base_url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, proxies=proxy)
             if resp.status_code != 200:
                 raise Exception(f"HTTP {resp.status_code} when fetching root page {base_url}")
             root_html = resp.text
