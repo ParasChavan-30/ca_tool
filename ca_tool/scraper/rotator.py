@@ -1,7 +1,7 @@
 import requests
 from urllib.parse import urlparse
 import logging
-from scraper.config import REQUEST_TIMEOUT, HTTP_HEADERS
+from scraper.config import REQUEST_TIMEOUT, HTTP_HEADERS, get_proxy_dict
 from scraper.db_manager import DatabaseManager
 
 logger = logging.getLogger("Rotator")
@@ -12,20 +12,28 @@ class SourceRotator:
 
     def check_site_health(self, url):
         """Sends a HEAD/GET request to test if a target site is reachable and responding."""
+        proxies = get_proxy_dict()
         try:
             # First try HEAD for speed
-            resp = requests.head(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            resp = requests.head(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True, proxies=proxies)
             if resp.status_code == 200:
                 return True, resp.status_code, "Site is online"
             
             # Fallback to GET if HEAD returned 405 or non-200
-            resp = requests.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, stream=True)
+            resp = requests.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, stream=True, proxies=proxies)
             if resp.status_code == 200:
                 return True, resp.status_code, "Site is online"
             return False, resp.status_code, f"HTTP Error {resp.status_code}"
         except requests.exceptions.Timeout:
             return False, 408, "Request timed out"
         except requests.exceptions.ConnectionError:
+            # Try direct connection fallback if proxy connection failed
+            try:
+                resp = requests.head(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+                if resp.status_code in [200, 301, 302]:
+                    return True, resp.status_code, "Site is online (direct fallback)"
+            except Exception:
+                pass
             return False, 503, "Connection error / DNS failure"
         except Exception as e:
             return False, 500, f"Exception: {str(e)}"
