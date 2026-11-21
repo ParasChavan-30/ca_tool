@@ -1,6 +1,7 @@
 import mysql.connector
 import sqlite3
 import os
+import requests
 from datetime import datetime
 import logging
 from scraper.config import MYSQL_CONFIG, USE_MYSQL, DB_PATH, PRIMARY_SOURCE, BACKUP_SOURCES
@@ -9,10 +10,43 @@ logger = logging.getLogger("DatabaseManager")
 
 class DatabaseManager:
     def __init__(self, use_mysql=USE_MYSQL):
+        self.ingest_url = os.getenv("INGEST_URL")
+        self.ingest_key = os.getenv("INGEST_KEY") or os.getenv("API_SECRET", "catool_secret_ingest_key_2026")
+        if self.ingest_url:
+            self.ingest_url = self.ingest_url.rstrip("/")
+            logger.info(f"DatabaseManager initialized in Remote Ingest Mode -> {self.ingest_url}")
+
         self.use_mysql = use_mysql
         self.mysql_config = MYSQL_CONFIG.copy()
         self.db_path = DB_PATH
-        self.init_db()
+        if not self.ingest_url:
+            self.init_db()
+
+    def _post_ingest(self, payload):
+        if not self.ingest_url:
+            return None
+        try:
+            headers = {
+                "X-API-KEY": self.ingest_key,
+                "Content-Type": "application/json"
+            }
+            res = requests.post(self.ingest_url, json=payload, headers=headers, timeout=30)
+            if res.status_code == 200:
+                return res.json()
+            else:
+                logger.error(f"Ingest POST returned HTTP {res.status_code}: {res.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Ingest request error: {e}")
+            return None
+
+    def set_status(self, status, details=None):
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "set_status",
+                "status": status,
+                "details": details or f"Status set to {status}"
+            })
 
     def get_connection(self):
         if self.use_mysql:
@@ -401,6 +435,15 @@ class DatabaseManager:
         conn.close()
 
     def update_source_status(self, source_id, status, total_scraped_delta=0):
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "update_source",
+                "source_id": source_id,
+                "status": status,
+                "scraped_delta": total_scraped_delta
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -425,6 +468,31 @@ class DatabaseManager:
         return dict(row) if row else None
 
     def get_all_sources(self):
+        if self.ingest_url:
+            res = self._post_ingest({"action": "get_sources"})
+            if res and res.get("sources"):
+                return res.get("sources")
+            sources = [{
+                "id": 1,
+                "name": PRIMARY_SOURCE["name"],
+                "domain": PRIMARY_SOURCE["domain"],
+                "url": PRIMARY_SOURCE["url"],
+                "is_primary": 1,
+                "failover_priority": 0,
+                "status": "ACTIVE"
+            }]
+            for idx, b in enumerate(BACKUP_SOURCES, start=2):
+                sources.append({
+                    "id": idx,
+                    "name": b["name"],
+                    "domain": b["domain"],
+                    "url": b["url"],
+                    "is_primary": 0,
+                    "failover_priority": idx,
+                    "status": "PENDING"
+                })
+            return sources
+
         conn = self.get_connection()
         cursor = conn.cursor(dictionary=True) if self.use_mysql else conn.cursor()
         cursor.execute("SELECT * FROM sources ORDER BY failover_priority ASC")
@@ -480,6 +548,25 @@ class DatabaseManager:
         conn.close()
 
     def save_knowledge_item(self, source_id, source_url, title, authority_category, full_html_content, collected_date, content_hash=None, notification_number=None, summary=None, published_date=None):
+        if self.ingest_url:
+            payload = {
+                "action": "save_knowledge",
+                "source_id": source_id,
+                "source_url": source_url,
+                "title": title,
+                "authority_category": authority_category,
+                "full_html_content": full_html_content,
+                "collected_date": str(collected_date),
+                "content_hash": content_hash,
+                "notification_number": notification_number,
+                "summary": summary,
+                "published_date": str(published_date) if published_date else None
+            }
+            res = self._post_ingest(payload)
+            if res and res.get("success"):
+                return res.get("id"), res.get("status", "ADDED")
+            return None, "FAILED"
+
         """
         Saves or updates a knowledge item using multi-attribute fallback change & duplicate detection:
         1. Match by source_url (or secondary linked source_url)
@@ -603,6 +690,16 @@ class DatabaseManager:
             return kb_id, "ADDED"
 
     def save_sub_page(self, knowledge_bank_id, sub_page_url, sub_page_title, sub_page_html):
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "save_sub_page",
+                "knowledge_bank_id": knowledge_bank_id,
+                "sub_page_url": sub_page_url,
+                "sub_page_title": sub_page_title,
+                "sub_page_html": sub_page_html
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         ph = "%s" if self.use_mysql else "?"
@@ -616,6 +713,17 @@ class DatabaseManager:
         conn.close()
 
     def save_attachment(self, knowledge_bank_id, file_name, file_url, local_storage_path, file_size_bytes):
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "save_attachment",
+                "knowledge_bank_id": knowledge_bank_id,
+                "file_name": file_name,
+                "file_url": file_url,
+                "local_storage_path": local_storage_path,
+                "file_size_bytes": file_size_bytes
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         ph = "%s" if self.use_mysql else "?"
@@ -629,6 +737,21 @@ class DatabaseManager:
         conn.close()
 
     def add_execution_log(self, source_id, status, items_scraped, log_details, error_message=None, items_added=0, items_updated=0, items_unchanged=0, wp_posts_updated=0):
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "add_log",
+                "source_id": source_id,
+                "status": status,
+                "items_scraped": items_scraped,
+                "items_added": items_added,
+                "items_updated": items_updated,
+                "items_unchanged": items_unchanged,
+                "wp_posts_updated": wp_posts_updated,
+                "log_details": log_details,
+                "error_message": error_message
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -95,6 +95,9 @@ def run_scraper_job(is_cron=False, force=False, target_source_id=None):
     logger.info(f"Starting CA Knowledge Bank Scraper Job (Cron Mode: {is_cron}, Target Source ID: {target_source_id})")
     logger.info("==================================================")
 
+    if hasattr(db, "set_status"):
+        db.set_status("RUNNING", f"Scraper Job Started (Target Source ID: {target_source_id or 'All'}).")
+
     # Step 1: Health check & site rotator or single target source
     if target_source_id:
         active_source = db.get_source_by_id(target_source_id) if hasattr(db, 'get_source_by_id') else None
@@ -159,11 +162,16 @@ def run_scraper_job(is_cron=False, force=False, target_source_id=None):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.update_cron_setting("last_cron_run", now_str)
 
+        if hasattr(db, "set_status"):
+            db.set_status("IDLE", f"Scraper Job Finished Successfully! Total Scraped: {scraped_count}")
+
         logger.info(f"Scraper Job Finished Successfully! Total Scraped: {scraped_count} (Added: {metrics.get('added')}, Updated: {metrics.get('updated')}, Unchanged: {metrics.get('unchanged')})")
         return True
     except Exception as e:
         err_msg = f"Unhandled Scraper Exception: {str(e)}"
         logger.error(err_msg, exc_info=True)
+        if hasattr(db, "set_status"):
+            db.set_status("FAILED", err_msg)
         db.add_execution_log(
             source_id=source_id,
             status="FAILED",
