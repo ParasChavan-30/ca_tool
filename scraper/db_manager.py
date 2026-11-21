@@ -15,12 +15,13 @@ class DatabaseManager:
         if self.ingest_url:
             self.ingest_url = self.ingest_url.rstrip("/")
             logger.info(f"DatabaseManager initialized in Remote Ingest Mode -> {self.ingest_url}")
+            self.use_mysql = False
+        else:
+            self.use_mysql = use_mysql
 
-        self.use_mysql = use_mysql
         self.mysql_config = MYSQL_CONFIG.copy()
         self.db_path = DB_PATH
-        if not self.ingest_url:
-            self.init_db()
+        self.init_db()
 
     def _post_ingest(self, payload):
         if not self.ingest_url:
@@ -49,7 +50,7 @@ class DatabaseManager:
             })
 
     def get_connection(self):
-        if self.use_mysql:
+        if self.use_mysql and not self.ingest_url:
             try:
                 # Connect to MySQL server
                 conn = mysql.connector.connect(
@@ -401,6 +402,9 @@ class DatabaseManager:
 
     def get_cron_settings(self):
         """Retrieves key-value dict of all cron settings."""
+        if self.ingest_url:
+            return {}
+
         conn = self.get_connection()
         cursor = conn.cursor(dictionary=True) if self.use_mysql else conn.cursor()
         cursor.execute("SELECT setting_key, setting_value FROM cron_settings")
@@ -416,6 +420,9 @@ class DatabaseManager:
 
     def update_cron_setting(self, key, value):
         """Updates or inserts a cron setting key-value pair."""
+        if self.ingest_url:
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -459,6 +466,12 @@ class DatabaseManager:
         conn.close()
 
     def get_source_by_domain(self, domain):
+        if self.ingest_url:
+            for s in self.get_all_sources():
+                if s.get("domain") == domain:
+                    return s
+            return None
+
         conn = self.get_connection()
         cursor = conn.cursor(dictionary=True) if self.use_mysql else conn.cursor()
         ph = "%s" if self.use_mysql else "?"
@@ -502,6 +515,14 @@ class DatabaseManager:
 
     def record_source_failure(self, source_id):
         """Increments failure count and automatically downgrades failover priority if consecutive failures >= 3."""
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "update_source",
+                "source_id": source_id,
+                "status": "FAILED"
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor(dictionary=True) if self.use_mysql else conn.cursor()
         ph = "%s" if self.use_mysql else "?"
@@ -533,6 +554,14 @@ class DatabaseManager:
 
     def reset_source_failure(self, source_id):
         """Resets failure count to 0 and restores active status upon successful operation."""
+        if self.ingest_url:
+            self._post_ingest({
+                "action": "update_source",
+                "source_id": source_id,
+                "status": "ACTIVE"
+            })
+            return
+
         conn = self.get_connection()
         cursor = conn.cursor()
         ph = "%s" if self.use_mysql else "?"
