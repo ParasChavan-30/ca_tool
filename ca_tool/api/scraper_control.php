@@ -38,7 +38,19 @@ function getScraperStatus($lockFile) {
     if (!file_exists($lockFile)) {
         return ['is_running' => false, 'pid' => null];
     }
-    $pid = trim(@file_get_contents($lockFile));
+    $raw = trim(@file_get_contents($lockFile));
+    if (strpos($raw, 'RUNNING_GHA') === 0) {
+        $parts = explode(':', $raw);
+        $startedAt = isset($parts[1]) ? (int)$parts[1] : 0;
+        // Active if triggered within last 45 minutes
+        if ($startedAt > 0 && (time() - $startedAt) < 2700) {
+            return ['is_running' => true, 'pid' => 'GitHub Actions'];
+        }
+        @unlink($lockFile);
+        return ['is_running' => false, 'pid' => null];
+    }
+
+    $pid = $raw;
     if (isPidRunning($pid)) {
         return ['is_running' => true, 'pid' => (int)$pid];
     }
@@ -57,13 +69,63 @@ if ($action === 'start') {
     $sourceId = isset($_REQUEST['source_id']) ? (int)$_REQUEST['source_id'] : 0;
     $status = getScraperStatus($lockFile);
     if ($status['is_running']) {
-        echo json_encode(['success' => false, 'error' => 'Scraper is already running in background (PID: ' . $status['pid'] . ')']);
+        echo json_encode(['success' => false, 'error' => 'Scraper is already running in background (' . $status['pid'] . ')']);
         exit();
     }
 
+    $targetText = $sourceId > 0 ? "for single Source ID #{$sourceId}" : "for all sources";
+
+    // 1. Check if GitHub Actions Integration is configured
+    $configFile = __DIR__ . '/../db_config.json';
+    $cfg = file_exists($configFile) ? json_decode(file_get_contents($configFile), true) : [];
+    $githubRepo = getenv('GITHUB_REPO') ?: ($cfg['github_repo'] ?? '');
+    $githubPat  = getenv('GITHUB_PAT') ?: ($cfg['github_pat'] ?? '');
+
+    if (!empty($githubRepo) && !empty($githubPat)) {
+        $apiUrl = "https://api.github.com/repos/{$githubRepo}/actions/workflows/scraper.yml/dispatches";
+        $ch = curl_init($apiUrl);
+        $payload = json_encode([
+            'ref' => 'main',
+            'inputs' => [
+                'mode' => ($sourceId > 0 ? 'once' : 'once'),
+                'source_id' => (string)$sourceId
+            ]
+        ]);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . trim($githubPat),
+            'Accept: application/vnd.github+json',
+            'User-Agent: CATool-Dashboard/1.0',
+            'Content-Type: application/json'
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode === 204) {
+            @file_put_contents($lockFile, "RUNNING_GHA:" . time());
+            try {
+                $pdo = getDBConnection();
+                $pdo->prepare("INSERT INTO execution_logs (source_id, status, items_scraped, log_details) VALUES (:sid, 'STARTED', 0, :msg)")
+                    ->execute([
+                        'sid' => $sourceId > 0 ? $sourceId : null,
+                        'msg' => "Scraper process dispatched to GitHub Actions {$targetText}."
+                    ]);
+            } catch (Exception $e) {}
+            echo json_encode(['success' => true, 'message' => "Scraper dispatched to GitHub Actions {$targetText}!"]);
+            exit();
+        } else {
+            echo json_encode(['success' => false, 'error' => "Failed to dispatch to GitHub Actions (HTTP {$httpCode}): " . $response]);
+            exit();
+        }
+    }
+
+    // 2. Fallback to Local Runner Script
     $runnerScript = realpath(__DIR__ . '/../scraper/runner.py');
     if (!$runnerScript || !file_exists($runnerScript)) {
-        echo json_encode(['success' => false, 'error' => 'Scraper runner script not found.']);
+        echo json_encode(['success' => false, 'error' => 'Scraper runner script not found locally, and GitHub Actions (github_repo/github_pat) is not configured.']);
         exit();
     }
 
