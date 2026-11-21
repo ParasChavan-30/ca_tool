@@ -53,6 +53,7 @@ jobs:
           WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          USE_PROXIES: "0"
           PYTHONUNBUFFERED: "1"
         run: |
           SOURCE_ID="${{ github.event.inputs.source_id }}"
