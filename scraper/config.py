@@ -159,7 +159,7 @@ PROXIES_LIST = [
     "http://sjpmxmld:bmmmttzivw7p@198.46.161.42:5092"
 ]
 
-USE_PROXIES = os.getenv("USE_PROXIES", "1").lower() in ["1", "true", "yes"]
+USE_PROXIES = os.getenv("USE_PROXIES", "0").lower() in ["1", "true", "yes"]
 
 import random
 

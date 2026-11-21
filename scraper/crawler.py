@@ -102,7 +102,14 @@ class WebsiteCrawler:
         try:
             logger.info(f"Scraping Knowledge Bank page: {url}")
             proxy = get_proxy_dict()
-            page_resp = session.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, proxies=proxy)
+            try:
+                page_resp = session.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, proxies=proxy)
+            except Exception as req_err:
+                if proxy:
+                    page_resp = session.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT)
+                else:
+                    raise req_err
+
             if page_resp.status_code != 200:
                 logger.warning(f"Skipping {url} - HTTP {page_resp.status_code}")
                 return False, [], "FAILED"
