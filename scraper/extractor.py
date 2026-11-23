@@ -23,42 +23,37 @@ class DataExtractor:
             "suresh chandra & associates", "sca", "suresh chandra and associates",
             "pankaj lunker & associates", "nexus advisors", "shah sol", "sujata bharti",
             "step ladder", "sunil kapoor & associates", "virendra associates",
-            "skymap alliance", "ppd & company", "srg finserv", "home"
+            "skymap alliance", "ppd & company", "srg finserv", "home",
+            "notification/circular search", "notification search", "circular search",
+            "search", "bulletins", "bulletin", "summary", "default", "knowledge bank entry"
         ]
 
         # 1. Try H1
         h1 = soup.find("h1")
         if h1 and h1.get_text(strip=True):
             val = h1.get_text(strip=True)
-            if val.lower() not in GENERIC_TITLES:
+            if val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower():
                 return val
 
         # 2. Try H2 or H3
         for tag_name in ["h2", "h3"]:
             for elem in soup.find_all(tag_name):
                 val = elem.get_text(strip=True)
-                if val and val.lower() not in GENERIC_TITLES and len(val) > 3:
+                if val and val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower() and len(val) > 3:
                     return val
 
         # 3. Check for specific title elements
         content_header = soup.find(class_=re.compile(r'title|heading|caption', re.I))
         if content_header and content_header.get_text(strip=True):
             val = content_header.get_text(strip=True)
-            if val.lower() not in GENERIC_TITLES:
+            if val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower():
                 return val
 
         # 4. Fallback to clean URL path formatting
         if default_url:
-            path = urllib.parse.urlparse(default_url).path
-            basename = os.path.basename(path)
-            # Remove extension (.aspx, .html)
-            clean_name = re.sub(r'\.(aspx|html|htm)$', '', basename, flags=re.I)
-            # Remove leading numeric ID prefix like -37- or -37_
-            clean_name = re.sub(r'^-?\d+[-_]', '', clean_name)
-            # Replace underscores and dashes with spaces
-            clean_name = clean_name.replace('_', ' ').replace('-', ' ').strip()
-            if clean_name:
-                return clean_name
+            clean_url = self.extract_title_from_url(default_url)
+            if clean_url:
+                return clean_url
 
         # 5. Last resort: <title>
         if soup.title and soup.title.get_text(strip=True):
@@ -69,6 +64,23 @@ class DataExtractor:
                     return p
 
         return "Knowledge Bank Entry"
+
+    def extract_title_from_url(self, url):
+        """Extracts a clean, human-readable title from URL segments when HTML title is generic or missing."""
+        if not url:
+            return ""
+        path = urllib.parse.urlparse(url).path
+        basename = os.path.basename(path)
+        clean_name = re.sub(r'\.(aspx|html|htm)$', '', basename, flags=re.I)
+        clean_name = re.sub(r'^-?\d+[-_]', '', clean_name)
+        clean_name = clean_name.replace('_', ' ').replace('-', ' ').strip()
+        
+        # If basename was empty or just '.aspx', check parent directory
+        if not clean_name:
+            dir_part = os.path.dirname(path).rstrip('/')
+            clean_name = os.path.basename(dir_part).replace('_', ' ').replace('-', ' ').strip()
+            
+        return clean_name
 
     def classify_category(self, title, html_text, page_url=""):
         """

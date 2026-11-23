@@ -629,8 +629,16 @@ class DatabaseManager:
                 cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE notification_number = {ph} AND authority_category = {ph}", (notif_clean, authority_category))
                 existing = cursor.fetchone()
 
-        # 3. Multi-Attribute Fallback Match: Title + Published Date (or exact Title match)
-        if not existing and title and len(title.strip()) > 10:
+        # 3. Multi-Attribute Fallback Match: Title + Published Date (or exact Title match) - Exclude generic headers
+        generic_titles = [
+            "notification/circular search", "notification search", "circular search",
+            "search", "bulletins", "bulletin", "home", "default", "summary",
+            "knowledge bank entry"
+        ]
+        clean_title_lower = (title or "").strip().lower()
+        is_generic_title = any(g in clean_title_lower for g in generic_titles)
+
+        if not existing and title and len(title.strip()) > 10 and not is_generic_title:
             clean_title = title.strip()
             if published_date:
                 cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE title = {ph} AND (published_date = {ph} OR DATE(collected_date) = {ph})", (clean_title, published_date, published_date))
@@ -639,10 +647,19 @@ class DatabaseManager:
                 cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE title = {ph} AND authority_category = {ph}", (clean_title, authority_category))
                 existing = cursor.fetchone()
 
-        # 4. Fallback Match: Content Hash Fingerprint
-        if not existing and content_hash:
+        # 4. Fallback Match: Content Hash Fingerprint (only if not generic)
+        if not existing and content_hash and not is_generic_title:
             cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE content_hash = {ph}", (content_hash,))
             existing = cursor.fetchone()
+
+        if existing:
+            existing_url = existing["source_url"] if isinstance(existing, dict) else existing[1]
+            existing_host = urllib.parse.urlparse(existing_url).netloc
+            source_host = urllib.parse.urlparse(source_url).netloc
+
+            # If URLs differ but domain is the SAME, they are distinct pages on the same website! Do NOT merge!
+            if existing_url != source_url and existing_host == source_host:
+                existing = None
 
         if existing:
             kb_id = existing["id"] if isinstance(existing, dict) else existing[0]
