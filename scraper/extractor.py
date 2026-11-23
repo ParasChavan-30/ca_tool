@@ -50,9 +50,12 @@ class DataExtractor:
         if any(b in t_lower for b in ["suresh chandra", "pankaj lunker", "nexus advisors"]):
             return True
         # Calendar date picker artifacts like <<<November 2026>>> or November 2026
-        if re.search(r'<{2,}.*?>{2,}', t):
+        if re.search(r'(<|&lt;){2,}.*?(>|&gt;){2,}', t, re.I) or re.search(r'<{2,}.*?>{2,}', t):
             return True
         if re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', t_lower):
+            return True
+        # Calculator outputs like "Instalment Amount: RS.0", "Total Effective Capital: Rs.0", "No. Of Installment:0"
+        if re.search(r':\s*(rs\.?\s*)?\d+', t_lower):
             return True
         return False
 
@@ -146,6 +149,11 @@ class DataExtractor:
         slug = re.sub(r'^-?\d+[-_]', '', slug)
         if slug.lower() == 'f_e_m_a':
             return 'FEMA'
+        
+        # Split camelCase (e.g. HomeBuyerRefund -> Home Buyer Refund)
+        slug = re.sub(r'([a-z])([A-Z])', r'\1 \2', slug)
+        slug = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', slug)
+
         words = re.split(r'[-_\s]+', slug)
         clean_words = []
         for w in words:
@@ -158,7 +166,10 @@ class DataExtractor:
                 clean_words.append(w)
             else:
                 clean_words.append(w.capitalize())
-        return " ".join(clean_words).strip()
+        res = " ".join(clean_words).strip()
+        if res.lower().startswith('cal ') and 'calculator' not in res.lower():
+            res = res[4:].strip() + ' Calculator'
+        return res
 
     def extract_title_from_url(self, url):
         """Extracts a clean, human-readable title from URL hierarchy when HTML title is generic or missing."""
@@ -181,7 +192,7 @@ class DataExtractor:
         title = self.clean_slug_to_title(candidate)
         if title.lower() in ['bulletins', 'calculators', 'forms', 'utilities', 'links', 'laws']:
             if len(meaningful) > 1:
-                title = self.clean_slug_to_title(meaningful[-1])
+                title = self.clean_slug_to_title(meaningful[-2])
 
         return title
 
@@ -205,7 +216,7 @@ class DataExtractor:
             return "Calculators"
         if "/resources/links/" in url_lower:
             return "Links"
-        if "/notificationsearch/" in url_lower:
+        if "/notificationsearch/" in url_lower or "/advancesearch/" in url_lower or "/bulletins/" in url_lower or "/bulletin/" in url_lower:
             return "Bulletins"
         if "/laws/" in url_lower:
             if "rule" in url_lower or "rule" in title_lower:
