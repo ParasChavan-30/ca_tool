@@ -1,3 +1,4 @@
+import os
 import re
 import urllib.parse
 import hashlib
@@ -6,7 +7,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scraper.config import HTTP_HEADERS, REQUEST_TIMEOUT, MAX_SUBPAGES_PER_ITEM, MAX_WORKERS, DISCOVERY_KEYWORDS, MAX_CRAWL_DEPTH, get_proxy_dict
+from scraper.config import HTTP_HEADERS, REQUEST_TIMEOUT, MAX_SUBPAGES_PER_ITEM, MAX_WORKERS, DISCOVERY_KEYWORDS, EXCLUDED_KEYWORDS, MAX_CRAWL_DEPTH, get_proxy_dict
 from scraper.extractor import DataExtractor
 from scraper.db_manager import DatabaseManager
 from scraper.wp_sync import WordPressSyncEngine
@@ -29,75 +30,236 @@ class WebsiteCrawler:
             except Exception as e:
                 logger.warning(f"Could not initialize WordPressSyncEngine for auto-sync: {e}")
 
+    def is_valid_knowledge_url(self, url, base_domain=None):
+        """
+        Validates that a URL belongs strictly to Knowledge Bank and excludes
+        all non-knowledge pages like Home, Services, Team, Careers, Contact Us, About, etc.
+        """
+        if not url:
+            return False
+
+        parsed = urllib.parse.urlparse(url)
+        if base_domain and parsed.netloc and parsed.netloc.lower() != base_domain.lower():
+            return False
+
+        path = parsed.path.lower()
+        full_url_lower = url.lower()
+
+        # 1. Reject static binary assets & media
+        ignored_exts = ('.jpg', '.png', '.jpeg', '.gif', '.zip', '.css', '.js', '.docx', '.xlsx', '.ico', '.svg', '.mp4', '.mp3')
+        if any(path.endswith(ext) or f"{ext}?" in full_url_lower for ext in ignored_exts):
+            return False
+
+        # 2. Strict Exclusions: corporate pages, services, about, career, etc.
+        # Exclude /resource/ (singular) which holds company/services pages, but allow /resources/ (plural)
+        if "/resource/" in path and "/resources/" not in path:
+            return False
+
+        # Blocked exact file basenames (case-insensitive)
+        blocked_exact_basenames = [
+            'home.aspx', 'about.aspx', 'about_us.aspx', 'about-us.aspx',
+            'team.aspx', 'our_team.aspx', 'our-team.aspx', 'partners.aspx', 'partner.aspx',
+            'the_sca_vision.aspx', 'vision.aspx', 'ifrs.aspx',
+            'contact.aspx', 'contact_us.aspx', 'contact-us.aspx',
+            'career.aspx', 'careers.aspx', 'query.aspx', 'newthemequerysheet.aspx',
+            'login.aspx', 'admin.aspx', 'timesheet.aspx', 'disclaimer.aspx',
+            'client.aspx', 'clients.aspx', 'feedback.aspx', 'services.aspx', 'service.aspx'
+        ]
+        basename = os.path.basename(path).lower()
+        if basename in blocked_exact_basenames:
+            return False
+
+        # Blocked directory segments
+        blocked_dirs = [
+            '/services/', '/service/', '/team/', '/about/', '/contact/',
+            '/career/', '/careers/', '/admin/', '/client/', '/clients/'
+        ]
+        if any(b_dir in path for b_dir in blocked_dirs):
+            return False
+
+        if any(token in full_url_lower for token in EXCLUDED_KEYWORDS):
+            return False
+
+        # 3. Must match Knowledge Bank areas (laws, resources, forms, utilities, bulletins, calculators, links, etc.)
+        valid_prefixes = (
+            '/laws/', '/resources/', '/utilities/', '/forms/',
+            '/bulletins/', '/calculators/', '/links/',
+            '/notificationsearch/', '/advancesearch/', '/notification/', '/circular/'
+        )
+        if any(p in path for p in valid_prefixes):
+            return True
+
+        # 4. Check for knowledge tokens in URL path segments
+        kb_tokens = ['/act', '/rule', '/circular', '/bulletin', '/notification', '/utility', '/calculator', '/form']
+        if any(t in path for t in kb_tokens):
+            return True
+
+        return False
+
+    def discover_knowledge_bank_menu(self, base_url, html_content):
+        """
+        Dynamically discovers and extracts the complete Knowledge Bank menu hierarchy:
+        Top-level categories (Calculators, Bulletins, Utilities, Links, Acts, Rules, Forms),
+        all nested subcategories, sub-dropdowns, and destination URLs.
+        Returns a dictionary mapping:
+        url -> {
+            'url': full_url,
+            'menu_title': clean_title,
+            'category': standardized_category,
+            'subcategory': subcategory,
+            'hierarchy': ' > '.join(path)
+        }
+        """
+        if not html_content:
+            return {}
+
+        soup = BeautifulSoup(html_content, "html.parser")
+        base_domain = urllib.parse.urlparse(base_url).netloc
+        discovered_items = {}
+        seen_urls = set()
+
+        # Step 1: Locate Knowledge Bank navigation element and its dropdown container
+        kb_menu = None
+        for a in soup.find_all(['a', 'button']):
+            text = a.get_text().strip().lower()
+            if "knowledge bank" in text or "knowledge hub" in text:
+                parent_li = a.find_parent("li")
+                if parent_li:
+                    kb_menu = parent_li.find("ul", class_=lambda c: c and "dropdown-menu" in c) or parent_li.find("ul")
+                    if kb_menu:
+                        break
+
+        # Fallback: Check for id='submenu3', 'submenu5', or any id containing 'submenu'
+        if not kb_menu:
+            kb_menu = soup.find(id="submenu3") or soup.find(id="submenu5") or soup.find(id=lambda i: i and "submenu" in i.lower())
+
+        if not kb_menu:
+            logger.warning(f"Could not locate Knowledge Bank dropdown container on {base_url}. Falling back to page link discovery.")
+            fallback_links = self.discover_knowledge_links(base_url, html_content)
+            for link in fallback_links:
+                cat = self.extractor.classify_category("", "", link)
+                discovered_items[link] = {
+                    "url": link,
+                    "menu_title": "",
+                    "category": cat,
+                    "subcategory": "",
+                    "hierarchy": f"Knowledge Bank > {cat}"
+                }
+            return discovered_items
+
+        def standardize_category(raw_name):
+            n = (raw_name or "").strip().lower()
+            if "calc" in n:
+                return "Calculators"
+            if "bulletin" in n:
+                return "Bulletins"
+            if "utilit" in n:
+                return "Utilities"
+            if "link" in n:
+                return "Links"
+            if "act" in n:
+                return "Acts"
+            if "rule" in n:
+                return "Rules"
+            if "form" in n:
+                return "Forms"
+            return raw_name.strip()
+
+        # Recursive traversal through nested <li> and <ul> tags
+        def traverse(ul_element, path_stack):
+            for li in ul_element.find_all("li", recursive=False):
+                a_tag = li.find("a", recursive=False)
+                if not a_tag:
+                    continue
+
+                raw_text = a_tag.get_text(strip=True).replace("\xa0", " ").strip()
+                # Clean trailing arrow glyphs & indicators
+                clean_title = raw_text
+                for suffix in ["\u25b6", ">", "\u00bb", "▼", "caret"]:
+                    clean_title = clean_title.rstrip(suffix).strip()
+
+                current_path = path_stack + [clean_title] if clean_title else path_stack
+                href = a_tag.get("href", "").strip()
+                child_ul = li.find("ul", recursive=False)
+
+                # Process destination URL if present and not a dummy toggle (#)
+                if href and href != "#" and not any(href.lower().startswith(p) for p in ["javascript:", "mailto:", "tel:"]):
+                    clean_href = href.split("#")[0].strip()
+                    if clean_href:
+                        full_url = urllib.parse.urljoin(base_url, clean_href)
+                        if self.is_valid_knowledge_url(full_url, base_domain):
+                            if full_url not in seen_urls and full_url.rstrip("/") != base_url.rstrip("/"):
+                                seen_urls.add(full_url)
+                                top_cat_raw = path_stack[0] if path_stack else clean_title
+                                top_cat = standardize_category(top_cat_raw)
+                                sub_cat = path_stack[1] if len(path_stack) > 1 else (clean_title if path_stack else "")
+                                hierarchy_str = " > ".join(current_path)
+
+                                discovered_items[full_url] = {
+                                    "url": full_url,
+                                    "menu_title": clean_title,
+                                    "category": top_cat,
+                                    "subcategory": sub_cat,
+                                    "hierarchy": hierarchy_str
+                                }
+
+                # Recursively explore nested sub-menus
+                if child_ul:
+                    traverse(child_ul, current_path)
+
+        traverse(kb_menu, [])
+
+        # Log detailed discovery breakdown
+        cat_counts = {}
+        for item in discovered_items.values():
+            c = item["category"]
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+        breakdown = ", ".join([f"{k}: {v}" for k, v in sorted(cat_counts.items())])
+        logger.info(f"Discovered {len(discovered_items)} Knowledge Bank items on {base_domain} ({breakdown})")
+
+        return discovered_items
+
+    def discover_knowledge_bank_menu_links(self, base_url, html_content):
+        """Extracts ALL links from inside the 'Knowledge Bank' navigation dropdown menu."""
+        items = self.discover_knowledge_bank_menu(base_url, html_content)
+        return list(items.keys())
+
     def discover_knowledge_links(self, base_url, html_content):
         """
-        Finds all Knowledge Bank & section links on a page using expanded discovery keywords.
-        Extracts all item links embedded inside tables, lists, and ASP.NET section view grids
-        on submenu pages down to every individual article and act section page.
+        Discovers child links, sub-pages, pagination, and articles strictly within the main content
+        of a Knowledge Bank page (ignoring headers, footers, and general navigation bars).
+        Strictly excludes any links outside the Knowledge Bank.
         """
         if not html_content:
             return []
 
         soup = BeautifulSoup(html_content, "html.parser")
-        kb_links = set()
         base_domain = urllib.parse.urlparse(base_url).netloc
+        kb_links = set()
+
+        # Remove navbars, headers, footers, and side menus to prevent re-crawling site-wide navigation
+        for tag in soup.find_all(["nav", "header", "footer", "aside"]):
+            tag.decompose()
+        for tag in soup.find_all(["div", "ul"], class_=lambda c: c and any(k in c.lower() for k in ["navbar", "nav-", "footer", "menu-container", "topbar"])):
+            tag.decompose()
 
         for a in soup.find_all("a", href=True):
             href = a['href'].strip()
-            if not href or any(href.lower().startswith(prefix) for prefix in ['javascript:', 'mailto:', 'tel:']):
+            if not href or href == '#' or any(href.lower().startswith(prefix) for prefix in ['javascript:', 'mailto:', 'tel:']):
                 continue
 
-            # Strip fragments
             clean_href = href.split('#')[0].strip()
             if not clean_href:
                 continue
 
             full_url = urllib.parse.urljoin(base_url, clean_href)
-            parsed = urllib.parse.urlparse(full_url)
-            url_lower = full_url.lower()
-            text_lower = a.get_text(strip=True).lower()
-
-            # Ensure link belongs to target domain
-            if parsed.netloc == base_domain:
-                # Exclude static assets and binary files
-                if not any(url_lower.endswith(ext) or f"{ext}?" in url_lower for ext in ['.pdf', '.jpg', '.png', '.jpeg', '.gif', '.zip', '.css', '.js', '.docx', '.xlsx', '.ico']):
-                    # Exclude self-referential root URL
-                    if full_url.rstrip('/') == base_url.rstrip('/'):
-                        continue
-
-                    # 1. Match discovery keywords in URL or link text
-                    matches_keyword = any(k in url_lower for k in DISCOVERY_KEYWORDS) or any(k in text_lower for k in DISCOVERY_KEYWORDS)
-
-                    # 2. Check if link is embedded inside data tables, lists, or ASP.NET section view grids
-                    is_inside_data_container = False
-                    parent = a.find_parent(['table', 'ul', 'ol', 'tbody', 'gridview', 'datalist'])
-                    if parent is not None:
-                        is_inside_data_container = True
-                    else:
-                        parent_div = a.find_parent('div')
-                        if parent_div:
-                            classes = " ".join(parent_div.get('class', [])).lower() if parent_div.get('class') else ""
-                            div_id = str(parent_div.get('id', '')).lower()
-                            if any(token in classes or token in div_id for token in ['grid', 'list', 'content', 'section', 'table', 'item', 'row', 'view', 'asp']):
-                                is_inside_data_container = True
-
-                    # 3. Check for primary category knowledge structure paths
-                    is_knowledge_path = any(p in url_lower for p in ['/laws/', '/resources/', '/utilities/', '/forms/', '/bulletins/', '/calculators/', '/links/'])
-
-                    # 4. Check for Pagination & Historical Archive links
-                    is_pagination_or_archive = (
-                        any(param in url_lower for param in ['page=', 'pg=', 'pageno=', 'p=', 'index=', 'year=']) or
-                        any(arch in url_lower for arch in ['archive', 'past', 'history', 'old', 'circulars-', 'bulletins-']) or
-                        bool(re.search(r'/(19|20)\d\d(/|\.|$)', url_lower)) or
-                        any(token in text_lower for token in ['next', 'previous', 'prev', 'page', 'archive', '2025', '2024', '2023', '2022', '2021', '2020'])
-                    )
-
-                    if matches_keyword or is_inside_data_container or is_knowledge_path or is_pagination_or_archive:
-                        kb_links.add(full_url)
+            if self.is_valid_knowledge_url(full_url, base_domain):
+                if full_url.rstrip('/') != base_url.rstrip('/'):
+                    kb_links.add(full_url)
 
         return list(kb_links)
 
-    def _scrape_single_page(self, url, source_id, session):
+    def _scrape_single_page(self, url, source_id, session, menu_meta=None):
         """Scrapes a single Knowledge Bank page, its attachments, subpages, and discovers child links using delta hashing."""
         try:
             logger.info(f"Scraping Knowledge Bank page: {url}")
@@ -117,11 +279,18 @@ class WebsiteCrawler:
             html_content = page_resp.text
             soup = BeautifulSoup(html_content, "html.parser")
 
-            # Extract H1 Title (prioritizing H1 tag)
+            # Extract H1 Title (prioritizing H1 tag, fallback to exact menu title if generic)
             title = self.extractor.extract_title(soup, url)
+            if menu_meta and menu_meta.get("menu_title"):
+                generic_titles = ["knowledge bank entry", "home", "default", ""]
+                if not title or title.lower() in generic_titles:
+                    title = menu_meta["menu_title"]
 
-            # Classify Authority / Category
-            category = self.extractor.classify_category(title, soup.get_text(), url)
+            # Classify Authority / Category: prioritize menu hierarchy metadata
+            if menu_meta and menu_meta.get("category"):
+                category = menu_meta["category"]
+            else:
+                category = self.extractor.classify_category(title, soup.get_text(), url)
 
             # Extract Extended Fields: Notification Number, Summary, Published Date
             notification_number = self.extractor.extract_notification_number(title, html_content)
@@ -224,16 +393,18 @@ class WebsiteCrawler:
             logger.error(err_msg)
             return 0, err_msg
 
-        # Step 3: Discover initial Knowledge Bank section URLs (Level 1)
-        initial_urls = set(self.discover_knowledge_links(base_url, root_html))
-        logger.info(f"Discovered {len(initial_urls)} section index links on {domain}")
+        # Step 3: Discover initial Knowledge Bank section URLs (Level 1) strictly from Knowledge Bank menu hierarchy
+        discovered_menu_items = self.discover_knowledge_bank_menu(base_url, root_html)
+        initial_urls = set(discovered_menu_items.keys())
+        logger.info(f"Discovered {len(initial_urls)} Knowledge Bank dropdown & submenu links on {domain}")
 
         if not initial_urls:
-            # Fallback: scrape root page as a single entry if no sub-links found
-            initial_urls = {base_url}
+            logger.warning(f"No Knowledge Bank dropdown links discovered on {domain}.")
+            return 0, "No Knowledge Bank links discovered.", {"scraped": 0, "added": 0, "updated": 0, "unchanged": 0}
 
         visited_urls = set()
         to_visit = initial_urls.copy()
+        url_metadata = discovered_menu_items.copy()
         scraped_count = 0
         added_count = 0
         updated_count = 0
@@ -251,10 +422,11 @@ class WebsiteCrawler:
                 futures = {}
                 for url in to_visit:
                     visited_urls.add(url)
-                    futures[executor.submit(self._scrape_single_page, url, source_id, session)] = url
+                    meta = url_metadata.get(url)
+                    futures[executor.submit(self._scrape_single_page, url, source_id, session, meta)] = (url, meta)
 
                 for future in as_completed(futures):
-                    url = futures[future]
+                    url, parent_meta = futures[future]
                     try:
                         success, child_links, status_str = future.result()
                         if success:
@@ -270,6 +442,15 @@ class WebsiteCrawler:
                             for child_url in child_links:
                                 if child_url not in visited_urls and child_url not in to_visit:
                                     next_level_urls.add(child_url)
+                                    # Inherit category from parent if child doesn't have metadata yet
+                                    if child_url not in url_metadata and parent_meta:
+                                        url_metadata[child_url] = {
+                                            "url": child_url,
+                                            "menu_title": "",
+                                            "category": parent_meta.get("category", "Acts"),
+                                            "subcategory": parent_meta.get("subcategory", ""),
+                                            "hierarchy": parent_meta.get("hierarchy", "") + " > Child Article"
+                                        }
                         else:
                             error_count += 1
                     except Exception as exc:

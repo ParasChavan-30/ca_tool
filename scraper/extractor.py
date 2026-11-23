@@ -74,12 +74,12 @@ class DataExtractor:
         """
         Classifies the content into one of the 7 Primary Categories:
         Utilities, Acts, Forms, Rules, Bulletins, Calculators, Links.
-        Prioritizes exact URL path patterns and title/content keywords.
+        Prioritizes exact URL path patterns and title keywords.
         """
         url_lower = (page_url or "").lower()
         title_lower = (title or "").lower()
 
-        # 1. Exact URL Path Matching
+        # 1. Exact URL Path Matching (Highest Reliability)
         if "/resources/utilities/" in url_lower:
             return "Utilities"
         if "/resources/forms/" in url_lower:
@@ -90,32 +90,44 @@ class DataExtractor:
             return "Calculators"
         if "/resources/links/" in url_lower:
             return "Links"
+        if "/notificationsearch/" in url_lower:
+            return "Bulletins"
         if "/laws/" in url_lower:
             if "rule" in url_lower or "rule" in title_lower:
                 return "Rules"
             return "Acts"
 
-        # 2. Fallback to Title and Combined Text Keyword Matching
-        combined = f"{title} {html_text} {page_url}".lower()
-        if "utility" in combined or "utilities" in combined:
-            return "Utilities"
-        if "form" in combined or "forms" in combined:
-            return "Forms"
-        if "bulletin" in combined or "bulletins" in combined:
-            return "Bulletins"
-        if "calculator" in combined or "calculators" in combined:
+        # 2. Title Keyword Matching (Strict on title to avoid matching navbar tokens in page body)
+        if any(w in title_lower for w in ["calculator", "calculate", "mrp", "hra", "eml", "loan", "rera", "net profit", "net worth"]):
             return "Calculators"
-        if "link" in combined or "links" in combined:
-            return "Links"
-        if "rule" in combined:
+        if any(w in title_lower for w in ["bulletin", "circular", "notification", "sebi", "rbi"]):
+            return "Bulletins"
+        if any(w in title_lower for w in ["rates of tds", "rates of income tax", "depreciation", "ifsc", "tds rate", "utility", "utilities"]):
+            return "Utilities"
+        if any(w in title_lower for w in ["form", "forms", "roc form", "cgst form", "declaration form"]):
+            return "Forms"
+        if any(w in title_lower for w in ["rule", "rules"]):
             return "Rules"
-        if "act" in combined or "laws" in combined:
+        if any(w in title_lower for w in ["act", "acts", "statute", "code", "amendment act"]):
             return "Acts"
+        if any(w in title_lower for w in ["important link", "useful link", "links", "portal"]):
+            return "Links"
 
-        for category, keywords in CATEGORY_KEYWORDS.items():
-            for kw in keywords:
-                if kw in combined:
-                    return category
+        # 3. URL Token Path Matching
+        if "calc" in url_lower:
+            return "Calculators"
+        if "bulletin" in url_lower or "notif" in url_lower or "circ" in url_lower:
+            return "Bulletins"
+        if "utilit" in url_lower:
+            return "Utilities"
+        if "form" in url_lower:
+            return "Forms"
+        if "rule" in url_lower:
+            return "Rules"
+        if "act" in url_lower or "law" in url_lower:
+            return "Acts"
+        if "link" in url_lower:
+            return "Links"
 
         return "Acts"
 

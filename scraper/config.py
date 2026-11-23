@@ -119,9 +119,19 @@ HTTP_HEADERS = {
 
 # Link Discovery Keywords (for section index & deep recursive URL discovery)
 DISCOVERY_KEYWORDS = [
-    'laws', 'bulletins', 'notification', 'circular', 'resource',
+    'laws', 'bulletins', 'notification', 'circular', 'resources',
     'income_tax', 'gst', 'corporate', 'audit', 'fema', 'act', 'rule',
     'utility', 'utilities', 'form', 'calculator', 'link'
+]
+
+# Non-Knowledge URLs to Exclude (Company pages, Services, Team, Careers, Contact, etc.)
+EXCLUDED_KEYWORDS = [
+    '/services/', '/service/', '/resource/services/', '/resource/service/',
+    '/career', '/careers', '/partner', '/partners', '/vision',
+    '/about', '/about-us', '/about_us', '/contact', '/contact-us', '/contact_us',
+    '/team', '/our-team', '/our_team', '/disclaimer', '/timesheet',
+    '/login', '/query', '/admin', '/feedback', '/client', '/clients', '/home.aspx',
+    '/the_sca_vision', '/ifrs.aspx', '/newthemequerysheet'
 ]
 
 # Category Keywords for Automatic Authority Classification (7 Primary Categories)
