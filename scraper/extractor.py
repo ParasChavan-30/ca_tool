@@ -31,7 +31,9 @@ class DataExtractor:
             "pankaj lunker & associates", "nexus advisors", "shah sol", "sujata bharti",
             "step ladder", "sunil kapoor & associates", "virendra associates",
             "skymap alliance", "ppd & company", "srg finserv", "summary", "about us",
-            "contact us", "our team", "careers", "page 1", "view details", "details"
+            "contact us", "our team", "careers", "page 1", "view details", "details",
+            "about", "services", "sca's services", "the sca vision", "fully amortized",
+            "important notes:", "important notes", "notes:", "notes", "note:", "note", "disclaimer", "instructions"
         }
 
     def is_generic_or_widget(self, text):
