@@ -13,74 +13,177 @@ class DataExtractor:
     def __init__(self, pdf_dir=PDF_DIR):
         self.pdf_dir = pdf_dir
         os.makedirs(self.pdf_dir, exist_ok=True)
-
-    def extract_title(self, soup, default_url=""):
-        """
-        Extracts title prioritizing HTML <H1> header as requested.
-        Handles generic site headers gracefully by cleaning URL basenames.
-        """
-        GENERIC_TITLES = [
+        self.known_acronyms = {
+            'rbi': 'RBI', 'sebi': 'SEBI', 'rbisebi': 'RBI SEBI', 'gst': 'GST',
+            'vat': 'VAT', 'llp': 'LLP', 'fema': 'FEMA', 'tds': 'TDS',
+            'indas': 'Ind AS', 'roc': 'ROC', 'nsc': 'NSC', 'hra': 'HRA',
+            'nbfc': 'NBFC', 'nbfcs': 'NBFCs', 'cgst': 'CGST', 'sgst': 'SGST',
+            'igst': 'IGST', 'utgst': 'UTGST', 'ifrs': 'IFRS', 'ifsc': 'IFSC',
+            'micr': 'MICR', 'hsn': 'HSN', 'mrp': 'MRP', 'cst': 'CST',
+            'cenvat': 'CENVAT', 'rera': 'RERA', 'mca': 'MCA', 'so': 'SO',
+            'cbdt': 'CBDT', 'ita': 'ITA', 'ibc': 'IBC', 'f_e_m_a': 'FEMA'
+        }
+        self.generic_titles = {
+            "notification/circular search", "notification search", "circular search",
+            "search", "bulletins", "bulletin", "home", "welcome", "dashboard",
+            "default page", "default", "login", "query", "knowledge bank entry",
             "suresh chandra & associates", "sca", "suresh chandra and associates",
             "pankaj lunker & associates", "nexus advisors", "shah sol", "sujata bharti",
             "step ladder", "sunil kapoor & associates", "virendra associates",
-            "skymap alliance", "ppd & company", "srg finserv", "home",
-            "notification/circular search", "notification search", "circular search",
-            "search", "bulletins", "bulletin", "summary", "default", "knowledge bank entry"
-        ]
+            "skymap alliance", "ppd & company", "srg finserv", "summary", "about us",
+            "contact us", "our team", "careers", "page 1", "view details", "details"
+        }
 
-        # 1. Try H1
-        h1 = soup.find("h1")
-        if h1 and h1.get_text(strip=True):
-            val = h1.get_text(strip=True)
-            if val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower():
-                return val
+    def is_generic_or_widget(self, text):
+        """Checks if a string is a generic heading, navigation artifact, or date picker calendar widget."""
+        if not text:
+            return True
+        t = text.strip()
+        if len(t) < 2 or len(t) > 150:
+            return True
+        t_lower = t.lower()
+        if t_lower in self.generic_titles:
+            return True
+        if "notification/circular search" in t_lower:
+            return True
+        # Check branding phrases
+        if any(b in t_lower for b in ["suresh chandra", "pankaj lunker", "nexus advisors"]):
+            return True
+        # Calendar date picker artifacts like <<<November 2026>>> or November 2026
+        if re.search(r'<{2,}.*?>{2,}', t):
+            return True
+        if re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', t_lower):
+            return True
+        return False
 
-        # 2. Try H2 or H3
-        for tag_name in ["h2", "h3"]:
-            for elem in soup.find_all(tag_name):
-                val = elem.get_text(strip=True)
-                if val and val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower() and len(val) > 3:
+    def extract_title(self, soup, default_url="", menu_title=""):
+        """
+        Intelligent 4-tier title extraction system:
+        Priority 1: Page-specific heading (with widget/calendar decomposition)
+        Priority 2: Breadcrumb and navigation information
+        Priority 3: HTML metadata (<title>, og:title, twitter:title)
+        Priority 4: Intelligent URL hierarchy and slug parsing
+        """
+        # If a valid menu title was passed from navigation, use it if page heading is missing/generic
+        if menu_title and not self.is_generic_or_widget(menu_title):
+            candidate_menu = menu_title.strip()
+        else:
+            candidate_menu = None
+
+        if soup:
+            # Clone or clean soup to strip calendar popups, widgets, and navigation bars
+            soup_clean = BeautifulSoup(str(soup), "html.parser")
+            for tag in soup_clean.find_all(["nav", "header", "footer", "aside"]):
+                tag.decompose()
+            for tag in soup_clean.find_all(class_=lambda c: c and any(k in str(c).lower() for k in ["navbar", "nav-", "footer", "topbar", "raddock", "radpicker", "calendar", "rctitle", "datepicker"])):
+                tag.decompose()
+            for tag in soup_clean.find_all(id=lambda i: i and any(k in str(i).lower() for k in ["calendar", "datepicker", "datefrom", "dateto"])):
+                tag.decompose()
+
+            # Priority 1: Page-specific H1
+            h1 = soup_clean.find("h1")
+            if h1 and h1.get_text(strip=True):
+                val = h1.get_text(strip=True)
+                if not self.is_generic_or_widget(val):
                     return val
 
-        # 3. Check for specific title elements
-        content_header = soup.find(class_=re.compile(r'title|heading|caption', re.I))
-        if content_header and content_header.get_text(strip=True):
-            val = content_header.get_text(strip=True)
-            if val.lower() not in GENERIC_TITLES and "notification/circular search" not in val.lower():
-                return val
+            # Priority 1b: Content H2 or H3
+            for tag_name in ["h2", "h3"]:
+                for elem in soup_clean.find_all(tag_name):
+                    val = elem.get_text(strip=True)
+                    if not self.is_generic_or_widget(val) and len(val) > 3:
+                        return val
 
-        # 4. Fallback to clean URL path formatting
+            # Priority 1c: Content heading classes
+            content_header = soup_clean.find(class_=re.compile(r'page-title|entry-title|content-heading', re.I))
+            if content_header and content_header.get_text(strip=True):
+                val = content_header.get_text(strip=True)
+                if not self.is_generic_or_widget(val):
+                    return val
+
+            # Priority 2: Breadcrumbs / Navigation items
+            breadcrumb = soup.find(class_=lambda c: c and 'breadcrumb' in str(c).lower())
+            if breadcrumb:
+                items = [li.get_text(strip=True) for li in breadcrumb.find_all(['li', 'a', 'span'])]
+                meaningful = [i for i in items if not self.is_generic_or_widget(i)]
+                if meaningful:
+                    return meaningful[-1]
+
+            if candidate_menu:
+                return candidate_menu
+
+            # Priority 3: HTML Metadata (<title>, og:title, twitter:title)
+            if soup.title and soup.title.get_text(strip=True):
+                raw_title = soup.title.get_text(strip=True)
+                parts = [p.strip() for p in re.split(r'\||-|–|—', raw_title)]
+                for p in parts:
+                    if not self.is_generic_or_widget(p):
+                        return p
+
+            for meta_prop in ['og:title', 'twitter:title']:
+                m = soup.find('meta', property=meta_prop) or soup.find('meta', attrs={'name': meta_prop})
+                if m and m.get('content'):
+                    val = m.get('content').strip()
+                    if not self.is_generic_or_widget(val):
+                        return val
+
+        if candidate_menu:
+            return candidate_menu
+
+        # Priority 4: Intelligent URL Hierarchy Extraction
         if default_url:
             clean_url = self.extract_title_from_url(default_url)
             if clean_url:
                 return clean_url
 
-        # 5. Last resort: <title>
-        if soup.title and soup.title.get_text(strip=True):
-            raw_title = soup.title.get_text(strip=True)
-            parts = [p.strip() for p in raw_title.split("|")]
-            for p in parts:
-                if p.lower() not in GENERIC_TITLES:
-                    return p
-
         return "Knowledge Bank Entry"
 
+    def clean_slug_to_title(self, slug):
+        """Converts raw URL slugs into human-readable titles preserving acronyms."""
+        if not slug:
+            return ""
+        slug = re.sub(r'\.(aspx|html|htm|php)$', '', slug, flags=re.I)
+        slug = re.sub(r'^-?\d+[-_]', '', slug)
+        if slug.lower() == 'f_e_m_a':
+            return 'FEMA'
+        words = re.split(r'[-_\s]+', slug)
+        clean_words = []
+        for w in words:
+            if not w:
+                continue
+            w_lower = w.lower()
+            if w_lower in self.known_acronyms:
+                clean_words.append(self.known_acronyms[w_lower])
+            elif w.isupper() and len(w) <= 5:
+                clean_words.append(w)
+            else:
+                clean_words.append(w.capitalize())
+        return " ".join(clean_words).strip()
+
     def extract_title_from_url(self, url):
-        """Extracts a clean, human-readable title from URL segments when HTML title is generic or missing."""
+        """Extracts a clean, human-readable title from URL hierarchy when HTML title is generic or missing."""
         if not url:
             return ""
-        path = urllib.parse.urlparse(url).path
-        basename = os.path.basename(path)
-        clean_name = re.sub(r'\.(aspx|html|htm)$', '', basename, flags=re.I)
-        clean_name = re.sub(r'^-?\d+[-_]', '', clean_name)
-        clean_name = clean_name.replace('_', ' ').replace('-', ' ').strip()
-        
-        # If basename was empty or just '.aspx', check parent directory
-        if not clean_name:
-            dir_part = os.path.dirname(path).rstrip('/')
-            clean_name = os.path.basename(dir_part).replace('_', ' ').replace('-', ' ').strip()
-            
-        return clean_name
+        parsed = urllib.parse.urlparse(url)
+        segments = [s for s in parsed.path.split('/') if s and s != '.aspx']
+        if not segments:
+            return ""
+
+        ignored_segments = {
+            'resources', 'laws', 'notificationsearch', 'advancesearch', 
+            'notification', 'bullnotification', 'resource', 'ca_tool'
+        }
+        meaningful = [s for s in segments if s.lower() not in ignored_segments]
+        if not meaningful:
+            meaningful = segments
+
+        candidate = meaningful[-1]
+        title = self.clean_slug_to_title(candidate)
+        if title.lower() in ['bulletins', 'calculators', 'forms', 'utilities', 'links', 'laws']:
+            if len(meaningful) > 1:
+                title = self.clean_slug_to_title(meaningful[-1])
+
+        return title
 
     def classify_category(self, title, html_text, page_url=""):
         """

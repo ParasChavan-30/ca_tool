@@ -279,20 +279,9 @@ class WebsiteCrawler:
             html_content = page_resp.text
             soup = BeautifulSoup(html_content, "html.parser")
 
-            # Extract H1 Title (prioritizing H1 tag, fallback to exact menu title or URL path if generic)
-            title = self.extractor.extract_title(soup, url)
-            generic_titles = [
-                "knowledge bank entry", "home", "default", "",
-                "notification/circular search", "notification search", "circular search",
-                "search", "bulletins", "bulletin", "summary"
-            ]
-            if not title or title.strip().lower() in generic_titles or "notification/circular search" in title.strip().lower():
-                if menu_meta and menu_meta.get("menu_title"):
-                    title = menu_meta["menu_title"]
-                else:
-                    url_title = self.extractor.extract_title_from_url(url)
-                    if url_title:
-                        title = url_title
+            # Extract Intelligent Title using 4-tier hierarchy (page heading -> menu -> metadata -> URL)
+            menu_title_candidate = menu_meta.get("menu_title") if menu_meta else ""
+            title = self.extractor.extract_title(soup, url, menu_title_candidate)
 
             # Classify Authority / Category: prioritize menu hierarchy metadata
             if menu_meta and menu_meta.get("category"):
