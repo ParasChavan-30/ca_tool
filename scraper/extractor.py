@@ -205,38 +205,56 @@ class DataExtractor:
 
         return attachments
 
-    def extract_subpages(self, soup, base_url, max_subpages=None, session=None):
-        """Discovers linked sub-pages on the same website for this knowledge entry."""
+    def extract_subpages(self, soup, base_url, max_subpages=5, session=None):
+        """Discovers linked sub-pages strictly within the main content of this knowledge entry."""
         sub_pages = []
         base_domain = urllib.parse.urlparse(base_url).netloc
         visited = {base_url}
         http = session or requests
 
-        for a in soup.find_all("a", href=True):
+        # Clone and decompose navigation, headers, footers, and menu containers
+        clean_soup = BeautifulSoup(str(soup), "html.parser")
+        for tag in clean_soup.find_all(["nav", "header", "footer", "aside"]):
+            tag.decompose()
+        for tag in clean_soup.find_all(["div", "ul"], class_=lambda c: c and any(k in c.lower() for k in ["navbar", "nav-", "footer", "menu-container", "topbar"])):
+            tag.decompose()
+
+        for a in clean_soup.find_all("a", href=True):
             if max_subpages is not None and max_subpages > 0 and len(sub_pages) >= max_subpages:
                 break
 
             href = a['href'].strip()
-            full_url = urllib.parse.urljoin(base_url, href)
-            parsed = urllib.parse.urlparse(full_url)
+            if not href or href == '#' or any(href.lower().startswith(p) for p in ['javascript:', 'mailto:', 'tel:']):
+                continue
 
-            # Only follow sub-links on the same domain that are html/aspx pages
+            full_url = urllib.parse.urljoin(base_url, href.split('#')[0].strip())
+            parsed = urllib.parse.urlparse(full_url)
+            path = parsed.path.lower()
+
+            # Only follow links on the same domain that belong strictly to Knowledge Bank
             if parsed.netloc == base_domain and full_url not in visited:
-                if any(ext in parsed.path.lower() for ext in ['.aspx', '.html', '.htm', '']) and not parsed.path.lower().endswith('.pdf'):
-                    visited.add(full_url)
-                    try:
-                        resp = http.get(full_url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT)
-                        if resp.status_code == 200:
-                            sub_soup = BeautifulSoup(resp.text, "html.parser")
-                            sub_title = self.extract_title(sub_soup, full_url)
-                            sub_pages.append({
-                                "sub_page_url": full_url,
-                                "sub_page_title": sub_title,
-                                "sub_page_html": resp.text
-                            })
-                            logger.info(f"Extracted sub-page: {sub_title} ({full_url})")
-                    except Exception as e:
-                        logger.warning(f"Could not fetch sub-page {full_url}: {str(e)}")
+                # Exclude company/services pages
+                if "/resource/" in path and "/resources/" not in path:
+                    continue
+                if any(bad in path for bad in ['/services/', '/team', '/about', '/contact', '/career', '/login', '/query', 'home.aspx', 'partner', 'vision', 'ifrs']):
+                    continue
+                # Must be a legitimate Knowledge Bank path
+                if any(p in path for p in ['/laws/', '/resources/', '/notificationsearch/', '/advancesearch/']):
+                    if any(ext in path for ext in ['.aspx', '.html', '.htm', '']) and not path.endswith('.pdf'):
+                        visited.add(full_url)
+                        try:
+                            resp = http.get(full_url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT)
+                            if resp.status_code == 200:
+                                sub_soup = BeautifulSoup(resp.text, "html.parser")
+                                sub_title = self.extract_title(sub_soup, full_url)
+                                sub_pages.append({
+                                    "sub_page_url": full_url,
+                                    "sub_page_title": sub_title,
+                                    "sub_page_html": resp.text
+                                })
+                                logger.info(f"Extracted sub-page: {sub_title} ({full_url})")
+                        except Exception as e:
+                            logger.warning(f"Could not fetch sub-page {full_url}: {str(e)}")
 
         return sub_pages
 
