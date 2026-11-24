@@ -33,7 +33,8 @@ class DataExtractor:
             "skymap alliance", "ppd & company", "srg finserv", "summary", "about us",
             "contact us", "our team", "careers", "page 1", "view details", "details",
             "about", "services", "sca's services", "the sca vision", "fully amortized",
-            "important notes:", "important notes", "notes:", "notes", "note:", "note", "disclaimer", "instructions"
+            "important notes:", "important notes", "notes:", "notes", "note:", "note", "disclaimer", "instructions",
+            "notificationdetail", "notification detail", "notification details", "detail", "details", "pdf", "word", "excel"
         }
 
     def is_generic_or_widget(self, text):
@@ -46,13 +47,19 @@ class DataExtractor:
         t_lower = t.lower()
         if t_lower in self.generic_titles:
             return True
-        if "notification/circular search" in t_lower:
+        if "notification/circular search" in t_lower or "notificationdetail" in t_lower:
             return True
+        
+        # Strip all punctuation and test slug
+        t_slug = re.sub(r'[^a-z0-9]', '', t_lower)
+        if t_slug in ['notificationdetail', 'notificationdetails', 'notificationsearch', 'circularsearch']:
+            return True
+
         # Check branding phrases
         if any(b in t_lower for b in ["suresh chandra", "pankaj lunker", "nexus advisors"]):
             return True
-        # Calendar date picker artifacts like <<<November 2026>>> or November 2026
-        if re.search(r'(<|&lt;){2,}.*?(>|&gt;){2,}', t, re.I) or re.search(r'<{2,}.*?>{2,}', t):
+        # Calendar date picker artifacts like <<<November 2026>>>, &lt;&lt;&lt;November 2026&gt;&gt;&gt;, <<November 2026>>
+        if re.search(r'(<|&lt;)+.*?(>|&gt;)+', t, re.I):
             return True
         if re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', t_lower):
             return True
@@ -184,11 +191,12 @@ class DataExtractor:
 
         ignored_segments = {
             'resources', 'laws', 'notificationsearch', 'advancesearch', 
-            'notification', 'bullnotification', 'resource', 'ca_tool'
+            'notification', 'bullnotification', 'resource', 'ca_tool',
+            'notificationdetail', 'notificationdetail.aspx'
         }
         meaningful = [s for s in segments if s.lower() not in ignored_segments]
         if not meaningful:
-            meaningful = segments
+            meaningful = [s for s in segments if 'notificationdetail' not in s.lower()] or segments
 
         candidate = meaningful[-1]
         title = self.clean_slug_to_title(candidate)
@@ -260,12 +268,16 @@ class DataExtractor:
         return "Acts"
 
     def _download_single_pdf(self, pdf_url, link_text, http):
-        """Helper to download a single PDF attachment safely."""
+        """Helper to download a single PDF attachment safely. Always returns attachment metadata."""
+        filename = ""
         try:
-            filename = os.path.basename(urllib.parse.urlparse(pdf_url).path)
-            if not filename or not filename.lower().endswith(".pdf"):
-                safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', link_text[:30])
-                filename = f"document_{safe_name}_{int(datetime.now().timestamp())}.pdf"
+            parsed_path = urllib.parse.urlparse(pdf_url).path
+            base = os.path.basename(parsed_path)
+            if base and base.lower().endswith(".pdf"):
+                filename = base
+            else:
+                clean_text = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', link_text[:50]).strip('_')
+                filename = f"{clean_text}.pdf" if clean_text else f"document_{int(datetime.now().timestamp())}.pdf"
 
             local_path = os.path.join(self.pdf_dir, filename)
 
@@ -296,24 +308,70 @@ class DataExtractor:
                     "file_size_bytes": file_size
                 }
         except Exception as e:
-            logger.warning(f"Failed to download PDF {pdf_url}: {str(e)}")
-        return None
+            logger.warning(f"Could not download PDF from {pdf_url}: {str(e)}")
+
+        # Fallback: Always preserve attachment metadata with URL so user can view/download directly
+        if not filename:
+            clean_text = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', link_text[:50]).strip('_')
+            filename = f"{clean_text}.pdf" if clean_text else f"document_{int(datetime.now().timestamp())}.pdf"
+
+        return {
+            "file_name": filename,
+            "file_url": pdf_url,
+            "local_storage_path": "",
+            "file_size_bytes": 0
+        }
 
     def extract_and_download_pdfs(self, soup, base_url, session=None):
         """
-        Finds all PDF attachment links on the page, downloads them concurrently to local storage,
-        and returns attachment metadata dict list.
+        Intelligently discovers and groups all PDF attachments belonging to this Knowledge Bank page.
+        Handles both direct .pdf download links and structured table form rows with PDF/notificationdetail links.
+        Returns list of attachment metadata dictionaries.
         """
         attachments = []
         pdf_links = set()
         http = session or requests
 
+        # 1. Structured table row parsing (e.g., Forms, Bulletins, Utilities listings)
+        for tr in soup.find_all("tr"):
+            row_anchors = tr.find_all("a", href=True)
+            if not row_anchors:
+                continue
+
+            # Extract human-readable description from the row's text cells
+            cells = tr.find_all(["td", "th"])
+            cell_texts = []
+            for td in cells:
+                td_copy = BeautifulSoup(str(td), "html.parser")
+                for a_tag in td_copy.find_all("a"):
+                    a_tag.decompose()
+                t = td_copy.get_text(strip=True)
+                if t and len(t) > 1 and t.lower() not in ["view", "download", "pdf", "word", "excel", "action", "actions"]:
+                    cell_texts.append(t)
+
+            row_desc = " - ".join(cell_texts).strip()
+
+            for a in row_anchors:
+                href = a['href'].strip()
+                a_text = a.get_text(strip=True)
+                is_pdf_link = (
+                    href.lower().endswith(".pdf") or
+                    ".pdf?" in href.lower() or
+                    "pdf" in a_text.lower() or
+                    ("notificationdetail" in href.lower() and any(k in a_text.lower() for k in ["pdf", "download", "view", "doc"]))
+                )
+                if is_pdf_link:
+                    full_url = urllib.parse.urljoin(base_url, href)
+                    doc_title = row_desc if row_desc else (a_text or "PDF Attachment")
+                    pdf_links.add((full_url, doc_title))
+
+        # 2. General content links to .pdf files
         for a in soup.find_all("a", href=True):
             href = a['href'].strip()
-            if href.lower().endswith(".pdf") or "pdf" in href.lower() or "download" in href.lower():
+            a_text = a.get_text(strip=True)
+            if href.lower().endswith(".pdf") or ".pdf?" in href.lower():
                 full_url = urllib.parse.urljoin(base_url, href)
-                if full_url.lower().endswith(".pdf") or ".pdf?" in full_url.lower():
-                    pdf_links.add((full_url, a.get_text(strip=True) or "Download PDF"))
+                pdf_links.add((full_url, a_text or "Download PDF"))
 
         if not pdf_links:
             return []

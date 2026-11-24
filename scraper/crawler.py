@@ -63,10 +63,17 @@ class WebsiteCrawler:
             'contact.aspx', 'contact_us.aspx', 'contact-us.aspx',
             'career.aspx', 'careers.aspx', 'query.aspx', 'newthemequerysheet.aspx',
             'login.aspx', 'admin.aspx', 'timesheet.aspx', 'disclaimer.aspx',
-            'client.aspx', 'clients.aspx', 'feedback.aspx', 'services.aspx', 'service.aspx'
+            'client.aspx', 'clients.aspx', 'feedback.aspx', 'services.aspx', 'service.aspx',
+            'notificationdetail.aspx'
         ]
         basename = os.path.basename(path).lower()
         if basename in blocked_exact_basenames:
+            return False
+
+        # Block child attachment wrappers and direct document files from being crawled as standalone HTML pages
+        if 'notificationdetail' in path or basename == 'notificationdetail.aspx':
+            return False
+        if any(path.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar', '.csv']):
             return False
 
         # Blocked directory segments
