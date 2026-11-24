@@ -146,6 +146,7 @@ def run_scraper_job(is_cron=False, force=False, target_source_id=None):
             logger.warning(f"Post-scraper job WP Sync error: {wp_err}")
 
         # Step 4: Record execution log with detailed delta metrics
+        trigger_mode = "CRON" if is_cron else "MANUAL"
         db.add_execution_log(
             source_id=source_id,
             status=status_flag,
@@ -155,7 +156,8 @@ def run_scraper_job(is_cron=False, force=False, target_source_id=None):
             items_unchanged=metrics.get("unchanged", 0),
             wp_posts_updated=wp_posts_updated,
             log_details=full_log_details,
-            error_message=None
+            error_message=None,
+            trigger_type=trigger_mode
         )
 
         # Step 5: Update last_cron_run timestamp in database settings

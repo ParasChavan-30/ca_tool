@@ -773,21 +773,32 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         ph = "%s" if self.use_mysql else "?"
+        
+        # Check if attachment already exists for this page to prevent duplicate entries
+        cursor.execute(f"SELECT id FROM attachments WHERE knowledge_bank_id = {ph} AND file_url = {ph}", (knowledge_bank_id, file_url))
+        if cursor.fetchone():
+            conn.close()
+            return
+
         query = f"""
             INSERT INTO attachments (knowledge_bank_id, file_name, file_url, local_storage_path, file_size_bytes)
             VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
         """
         cursor.execute(query, (knowledge_bank_id, file_name, file_url, local_storage_path, file_size_bytes))
+        
+        # Flag parent page for WordPress sync because attachment information changed
+        cursor.execute(f"UPDATE knowledge_bank SET wp_synced_at = NULL WHERE id = {ph}", (knowledge_bank_id,))
         if not self.use_mysql:
             conn.commit()
         conn.close()
 
-    def add_execution_log(self, source_id, status, items_scraped, log_details, error_message=None, items_added=0, items_updated=0, items_unchanged=0, wp_posts_updated=0):
+    def add_execution_log(self, source_id, status, items_scraped, log_details, error_message=None, items_added=0, items_updated=0, items_unchanged=0, wp_posts_updated=0, trigger_type="CRON"):
         if self.ingest_url:
             self._post_ingest({
                 "action": "add_log",
                 "source_id": source_id,
                 "status": status,
+                "trigger_type": trigger_type,
                 "items_scraped": items_scraped,
                 "items_added": items_added,
                 "items_updated": items_updated,
@@ -797,6 +808,29 @@ class DatabaseManager:
                 "error_message": error_message
             })
             return
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        ph = "%s" if self.use_mysql else "?"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        query = f"""
+            INSERT INTO execution_logs (source_id, run_timestamp, status, trigger_type, items_scraped, items_added, items_updated, items_unchanged, wp_posts_updated, log_details, error_message)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+        """
+        try:
+            cursor.execute(query, (source_id, now, status, trigger_type, items_scraped, items_added, items_updated, items_unchanged, wp_posts_updated, log_details, error_message))
+        except Exception:
+            # Fallback if trigger_type column does not exist
+            query_fb = f"""
+                INSERT INTO execution_logs (source_id, run_timestamp, status, items_scraped, items_added, items_updated, items_unchanged, wp_posts_updated, log_details, error_message)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """
+            cursor.execute(query_fb, (source_id, now, status, items_scraped, items_added, items_updated, items_unchanged, wp_posts_updated, log_details, error_message))
+
+        if not self.use_mysql:
+            conn.commit()
+        conn.close()
 
         conn = self.get_connection()
         cursor = conn.cursor()

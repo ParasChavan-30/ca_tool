@@ -321,18 +321,19 @@ class WebsiteCrawler:
             )
 
             if kb_id:
-                # If page is newly ADDED or UPDATED, extract subpages and attachments
-                if status_str in ["ADDED", "UPDATED"]:
-                    attachments = self.extractor.extract_and_download_pdfs(soup, url, session=session)
-                    for att in attachments:
-                        self.db.save_attachment(
-                            knowledge_bank_id=kb_id,
-                            file_name=att["file_name"],
-                            file_url=att["file_url"],
-                            local_storage_path=att["local_storage_path"],
-                            file_size_bytes=att["file_size_bytes"]
-                        )
+                # Extract attachments for newly added, updated, OR unchanged pages to detect newly attached PDFs
+                attachments = self.extractor.extract_and_download_pdfs(soup, url, session=session)
+                for att in attachments:
+                    self.db.save_attachment(
+                        knowledge_bank_id=kb_id,
+                        file_name=att["file_name"],
+                        file_url=att["file_url"],
+                        local_storage_path=att["local_storage_path"],
+                        file_size_bytes=att["file_size_bytes"]
+                    )
 
+                # If page is newly ADDED or UPDATED, also extract subpages
+                if status_str in ["ADDED", "UPDATED"]:
                     sub_pages = self.extractor.extract_subpages(soup, url, max_subpages=MAX_SUBPAGES_PER_ITEM, session=session)
                     for sub in sub_pages:
                         self.db.save_sub_page(
