@@ -2,6 +2,9 @@ import mysql.connector
 import sqlite3
 import os
 import requests
+import urllib
+import urllib.parse
+from urllib.parse import urlparse
 from datetime import datetime
 import logging
 from scraper.config import MYSQL_CONFIG, USE_MYSQL, DB_PATH, PRIMARY_SOURCE, BACKUP_SOURCES
@@ -252,6 +255,9 @@ class DatabaseManager:
                 cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'content_hash'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN content_hash VARCHAR(64) NULL AFTER full_html_content")
+                cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'last_synced_hash'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_synced_hash VARCHAR(64) NULL AFTER content_hash")
                 cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'notification_number'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN notification_number VARCHAR(255) NULL AFTER authority_category")
@@ -264,10 +270,21 @@ class DatabaseManager:
                 cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'last_updated_at'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_updated_at DATETIME NULL AFTER collected_date")
+                cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'last_checked_at'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_checked_at DATETIME NULL AFTER last_updated_at")
                 cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'wp_post_id'")
                 if not cursor.fetchone():
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_post_id INT NULL AFTER collected_date")
+                cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'wp_synced_at'")
+                if not cursor.fetchone():
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_synced_at DATETIME NULL AFTER wp_post_id")
+                cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'sync_status'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN sync_status VARCHAR(30) DEFAULT 'PENDING' AFTER wp_synced_at")
+                cursor.execute("SHOW COLUMNS FROM knowledge_bank LIKE 'wp_error'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_error TEXT NULL AFTER sync_status")
 
                 cursor.execute("SHOW COLUMNS FROM execution_logs LIKE 'items_added'")
                 if not cursor.fetchone():
@@ -305,6 +322,8 @@ class DatabaseManager:
                 columns = [row[1] for row in cursor.fetchall()]
                 if 'content_hash' not in columns:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN content_hash TEXT")
+                if 'last_synced_hash' not in columns:
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_synced_hash TEXT")
                 if 'notification_number' not in columns:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN notification_number TEXT")
                 if 'summary' not in columns:
@@ -313,10 +332,16 @@ class DatabaseManager:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN published_date DATE")
                 if 'last_updated_at' not in columns:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_updated_at DATETIME")
+                if 'last_checked_at' not in columns:
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN last_checked_at DATETIME")
                 if 'wp_post_id' not in columns:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_post_id INTEGER")
                 if 'wp_synced_at' not in columns:
                     cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_synced_at DATETIME")
+                if 'sync_status' not in columns:
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN sync_status TEXT DEFAULT 'PENDING'")
+                if 'wp_error' not in columns:
+                    cursor.execute("ALTER TABLE knowledge_bank ADD COLUMN wp_error TEXT")
 
                 cursor.execute("PRAGMA table_info(execution_logs)")
                 log_cols = [row[1] for row in cursor.fetchall()]
@@ -614,19 +639,19 @@ class DatabaseManager:
         existing = None
 
         # 1. Primary Match: Exact source_url in knowledge_bank
-        cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE source_url = {ph}", (source_url,))
+        cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id, wp_synced_at, last_synced_hash, sync_status FROM knowledge_bank WHERE source_url = {ph}", (source_url,))
         existing = cursor.fetchone()
 
         # 1b. Secondary Match: Check if source_url exists in secondary linked sources table
         if not existing:
-            cursor.execute(f"SELECT kb.id, kb.source_url, kb.content_hash, kb.notification_number, kb.summary, kb.published_date, kb.wp_post_id FROM knowledge_bank_sources kbs JOIN knowledge_bank kb ON kbs.knowledge_bank_id = kb.id WHERE kbs.source_url = {ph}", (source_url,))
+            cursor.execute(f"SELECT kb.id, kb.source_url, kb.content_hash, kb.notification_number, kb.summary, kb.published_date, kb.wp_post_id, kb.wp_synced_at, kb.last_synced_hash, kb.sync_status FROM knowledge_bank_sources kbs JOIN knowledge_bank kb ON kbs.knowledge_bank_id = kb.id WHERE kbs.source_url = {ph}", (source_url,))
             existing = cursor.fetchone()
 
         # 2. Multi-Attribute Fallback Match: Reference/Notification Number (if valid & not N/A)
         if not existing and notification_number and notification_number.strip().upper() not in ["N/A", "NONE", ""]:
             notif_clean = notification_number.strip()
             if len(notif_clean) >= 3:
-                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE notification_number = {ph} AND authority_category = {ph}", (notif_clean, authority_category))
+                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id, wp_synced_at, last_synced_hash, sync_status FROM knowledge_bank WHERE notification_number = {ph} AND authority_category = {ph}", (notif_clean, authority_category))
                 existing = cursor.fetchone()
 
         # 3. Multi-Attribute Fallback Match: Title + Published Date (or exact Title match) - Exclude generic headers
@@ -641,21 +666,21 @@ class DatabaseManager:
         if not existing and title and len(title.strip()) > 10 and not is_generic_title:
             clean_title = title.strip()
             if published_date:
-                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE title = {ph} AND (published_date = {ph} OR DATE(collected_date) = {ph})", (clean_title, published_date, published_date))
+                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id, wp_synced_at, last_synced_hash, sync_status FROM knowledge_bank WHERE title = {ph} AND (published_date = {ph} OR DATE(collected_date) = {ph})", (clean_title, published_date, published_date))
                 existing = cursor.fetchone()
             if not existing:
-                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE title = {ph} AND authority_category = {ph}", (clean_title, authority_category))
+                cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id, wp_synced_at, last_synced_hash, sync_status FROM knowledge_bank WHERE title = {ph} AND authority_category = {ph}", (clean_title, authority_category))
                 existing = cursor.fetchone()
 
         # 4. Fallback Match: Content Hash Fingerprint (only if not generic)
         if not existing and content_hash and not is_generic_title:
-            cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id FROM knowledge_bank WHERE content_hash = {ph}", (content_hash,))
+            cursor.execute(f"SELECT id, source_url, content_hash, notification_number, summary, published_date, wp_post_id, wp_synced_at, last_synced_hash, sync_status FROM knowledge_bank WHERE content_hash = {ph}", (content_hash,))
             existing = cursor.fetchone()
 
         if existing:
             existing_url = existing["source_url"] if isinstance(existing, dict) else existing[1]
-            existing_host = urllib.parse.urlparse(existing_url).netloc
-            source_host = urllib.parse.urlparse(source_url).netloc
+            existing_host = urlparse(existing_url).netloc
+            source_host = urlparse(source_url).netloc
 
             # If URLs differ but domain is the SAME, they are distinct pages on the same website! Do NOT merge!
             if existing_url != source_url and existing_host == source_host:
@@ -683,32 +708,65 @@ class DatabaseManager:
 
             # Same source URL: compare content hashes
             if content_hash and existing_hash and content_hash == existing_hash:
+                # Content is UNCHANGED: update last_checked_at and PRESERVE wp_synced_at and sync_status!
+                if self.use_mysql:
+                    cursor.execute("UPDATE knowledge_bank SET last_checked_at = %s WHERE id = %s", (now, kb_id))
+                else:
+                    cursor.execute("UPDATE knowledge_bank SET last_checked_at = ? WHERE id = ?", (now, kb_id))
+                    conn.commit()
                 conn.close()
                 return kb_id, "UNCHANGED"
             else:
-                # Content updated: update record
-                if self.use_mysql:
-                    query = """
-                        UPDATE knowledge_bank
-                        SET title = %s, authority_category = %s, notification_number = %s, summary = %s,
-                            published_date = %s, full_html_content = %s, content_hash = %s,
-                            last_updated_at = %s, wp_synced_at = NULL
-                        WHERE id = %s
-                    """
-                    cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, kb_id))
+                # Content updated: determine sync status based on published fingerprint
+                wp_post_id = existing["wp_post_id"] if isinstance(existing, dict) else (existing[6] if len(existing) > 6 else None)
+                last_synced_hash = existing.get("last_synced_hash") if isinstance(existing, dict) else (existing[8] if len(existing) > 8 else None)
+
+                if wp_post_id and last_synced_hash and content_hash == last_synced_hash:
+                    # Content still matches WordPress published state!
+                    new_status = 'SYNCED'
+                    if self.use_mysql:
+                        query = """
+                            UPDATE knowledge_bank
+                            SET title = %s, authority_category = %s, notification_number = %s, summary = %s,
+                                published_date = %s, full_html_content = %s, content_hash = %s,
+                                last_updated_at = %s, last_checked_at = %s, sync_status = %s
+                            WHERE id = %s
+                        """
+                        cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, now, new_status, kb_id))
+                    else:
+                        query = """
+                            UPDATE knowledge_bank
+                            SET title = ?, authority_category = ?, notification_number = ?, summary = ?,
+                                published_date = ?, full_html_content = ?, content_hash = ?,
+                                last_updated_at = ?, last_checked_at = ?, sync_status = ?
+                            WHERE id = ?
+                        """
+                        cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, now, new_status, kb_id))
+                        conn.commit()
                 else:
-                    query = """
-                        UPDATE knowledge_bank
-                        SET title = ?, authority_category = ?, notification_number = ?, summary = ?,
-                            published_date = ?, full_html_content = ?, content_hash = ?,
-                            last_updated_at = ?, wp_synced_at = NULL
-                        WHERE id = ?
-                    """
-                    cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, kb_id))
-                    conn.commit()
+                    # Genuinely modified content: flag for Re-sync or Pending
+                    new_status = 'RE_SYNC' if wp_post_id else 'PENDING'
+                    if self.use_mysql:
+                        query = """
+                            UPDATE knowledge_bank
+                            SET title = %s, authority_category = %s, notification_number = %s, summary = %s,
+                                published_date = %s, full_html_content = %s, content_hash = %s,
+                                last_updated_at = %s, last_checked_at = %s, wp_synced_at = NULL, sync_status = %s
+                            WHERE id = %s
+                        """
+                        cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, now, new_status, kb_id))
+                    else:
+                        query = """
+                            UPDATE knowledge_bank
+                            SET title = ?, authority_category = ?, notification_number = ?, summary = ?,
+                                published_date = ?, full_html_content = ?, content_hash = ?,
+                                last_updated_at = ?, last_checked_at = ?, wp_synced_at = NULL, sync_status = ?
+                            WHERE id = ?
+                        """
+                        cursor.execute(query, (title, authority_category, notification_number, summary, published_date, full_html_content, content_hash, now, now, new_status, kb_id))
+                        conn.commit()
 
                 cursor.execute(f"DELETE FROM sub_pages WHERE knowledge_bank_id = {ph}", (kb_id,))
-                cursor.execute(f"DELETE FROM attachments WHERE knowledge_bank_id = {ph}", (kb_id,))
                 if not self.use_mysql:
                     conn.commit()
 
@@ -786,8 +844,16 @@ class DatabaseManager:
         """
         cursor.execute(query, (knowledge_bank_id, file_name, file_url, local_storage_path, file_size_bytes))
         
-        # Flag parent page for WordPress sync because attachment information changed
-        cursor.execute(f"UPDATE knowledge_bank SET wp_synced_at = NULL WHERE id = {ph}", (knowledge_bank_id,))
+        # Check if parent post was already synced to WordPress
+        cursor.execute(f"SELECT wp_post_id FROM knowledge_bank WHERE id = {ph}", (knowledge_bank_id,))
+        parent_row = cursor.fetchone()
+        parent_post_id = parent_row["wp_post_id"] if isinstance(parent_row, dict) else (parent_row[0] if parent_row else None)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if parent_post_id:
+            cursor.execute(f"UPDATE knowledge_bank SET wp_synced_at = NULL, sync_status = 'RE_SYNC', last_updated_at = {ph} WHERE id = {ph}", (now, knowledge_bank_id,))
+        else:
+            cursor.execute(f"UPDATE knowledge_bank SET last_updated_at = {ph} WHERE id = {ph}", (now, knowledge_bank_id,))
         if not self.use_mysql:
             conn.commit()
         conn.close()
@@ -900,18 +966,41 @@ class DatabaseManager:
         """Fetches items from knowledge_bank that have not yet been synced to WordPress."""
         return self.get_knowledge_items_for_sync(limit=limit, force=False)
 
-    def update_wp_sync_status(self, kb_id, wp_post_id):
-        """Updates wp_post_id and wp_synced_at timestamp for a knowledge item."""
+    def update_wp_sync_status(self, kb_id, wp_post_id, content_hash=None):
+        """Updates wp_post_id, wp_synced_at timestamp, last_synced_hash, and sync_status for a knowledge item."""
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ph = "%s" if self.use_mysql else "?"
+        if content_hash:
+            query = f"""
+                UPDATE knowledge_bank
+                SET wp_post_id = {ph}, wp_synced_at = {ph}, last_synced_hash = {ph}, sync_status = 'SYNCED', wp_error = NULL
+                WHERE id = {ph}
+            """
+            cursor.execute(query, (wp_post_id, now, content_hash, kb_id))
+        else:
+            query = f"""
+                UPDATE knowledge_bank
+                SET wp_post_id = {ph}, wp_synced_at = {ph}, last_synced_hash = COALESCE(last_synced_hash, content_hash), sync_status = 'SYNCED', wp_error = NULL
+                WHERE id = {ph}
+            """
+            cursor.execute(query, (wp_post_id, now, kb_id))
+        if not self.use_mysql:
+            conn.commit()
+        conn.close()
+
+    def set_wp_sync_error(self, kb_id, error_message):
+        """Marks a knowledge item as failed during WordPress synchronization."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        ph = "%s" if self.use_mysql else "?"
         query = f"""
             UPDATE knowledge_bank
-            SET wp_post_id = {ph}, wp_synced_at = {ph}
+            SET sync_status = 'FAILED', wp_error = {ph}
             WHERE id = {ph}
         """
-        cursor.execute(query, (wp_post_id, now, kb_id))
+        cursor.execute(query, (error_message, kb_id))
         if not self.use_mysql:
             conn.commit()
         conn.close()

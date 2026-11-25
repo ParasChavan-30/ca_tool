@@ -303,8 +303,18 @@ class WebsiteCrawler:
 
             collected_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Compute SHA-256 fingerprint hash of page HTML
-            content_hash = hashlib.sha256(html_content.encode("utf-8")).hexdigest()
+            # Extract attachments to inspect PDF presence for content fingerprinting
+            attachments = self.extractor.extract_and_download_pdfs(soup, url, session=session)
+            att_urls = [att.get("file_url") for att in attachments if att.get("file_url")]
+
+            # Compute normalized SHA-256 fingerprint hash of page content & metadata
+            content_hash = self.extractor.compute_content_fingerprint(
+                html_content=html_content,
+                title=title,
+                category=category,
+                notification_number=notification_number,
+                attachment_urls=att_urls
+            )
 
             # Save / Delta update Knowledge Bank entry in Database with extended fields & multi-attribute matching
             kb_id, status_str = self.db.save_knowledge_item(
@@ -321,8 +331,6 @@ class WebsiteCrawler:
             )
 
             if kb_id:
-                # Extract attachments for newly added, updated, OR unchanged pages to detect newly attached PDFs
-                attachments = self.extractor.extract_and_download_pdfs(soup, url, session=session)
                 for att in attachments:
                     self.db.save_attachment(
                         knowledge_bank_id=kb_id,

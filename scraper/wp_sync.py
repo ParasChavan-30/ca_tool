@@ -368,17 +368,20 @@ class WordPressSyncEngine:
                 res_data = resp.json()
                 res_wp_post_id = res_data.get("id", wp_post_id)
                 
-                # Update local DB record with WP Post ID and timestamp
-                self.db.update_wp_sync_status(item["id"], res_wp_post_id)
+                # Update local DB record with WP Post ID, timestamp, and content fingerprint
+                self.db.update_wp_sync_status(item["id"], res_wp_post_id, content_hash=item.get("content_hash"))
                 logger.info(f"Successfully {'updated' if wp_post_id else 'published'} WP Post ID {res_wp_post_id} for KB Item #{item['id']} ('{title[:40]}')")
                 return {"success": True, "kb_id": item["id"], "wp_post_id": res_wp_post_id}
             else:
                 err_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                self.db.set_wp_sync_error(item["id"], err_msg)
                 logger.error(f"Failed WP REST sync for KB Item #{item['id']}: {err_msg}")
                 return {"success": False, "kb_id": item["id"], "error": err_msg}
         except Exception as e:
+            err_msg = str(e)
+            self.db.set_wp_sync_error(item["id"], err_msg)
             logger.error(f"Exception during WP sync for KB Item #{item['id']}: {e}")
-            return {"success": False, "kb_id": item["id"], "error": str(e)}
+            return {"success": False, "kb_id": item["id"], "error": err_msg}
 
     def sync_batch(self, limit=25, force=False, item_id=None):
         """Fetches and syncs a batch of items from local database to WordPress."""

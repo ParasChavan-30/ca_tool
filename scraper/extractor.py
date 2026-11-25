@@ -1,5 +1,6 @@
 import os
 import re
+import hashlib
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
@@ -489,4 +490,60 @@ class DataExtractor:
                     except ValueError:
                         pass
         return datetime.now().strftime("%Y-%m-%d")
+
+    def normalize_html_for_fingerprint(self, raw_html):
+        """
+        Normalizes scraped HTML into a clean, stable structural representation
+        for deterministic content hashing. Strips dynamic ASP.NET state tokens,
+        embedded scripts, styles, comments, and whitespace jitter.
+        """
+        if not raw_html:
+            return ""
+
+        # 1. Strip script, style, noscript, iframe tags
+        clean = re.sub(r'<(script|style|noscript|iframe)\b[^>]*>.*?</\1>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
+
+        # 2. Strip HTML comments (which often contain server render timestamps/build numbers)
+        clean = re.sub(r'<!--.*?-->', '', clean, flags=re.DOTALL)
+
+        # 3. Strip all ASP.NET hidden inputs (__VIEWSTATE, __EVENTVALIDATION, etc.)
+        clean = re.sub(r'<input[^>]+name=["\']__(?:VIEWSTATE|EVENTVALIDATION|VIEWSTATEGENERATOR|EVENTTARGET|EVENTARGUMENT)[^"\']*["\'][^>]*>', '', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'<input[^>]+id=["\']__(?:VIEWSTATE|EVENTVALIDATION|VIEWSTATEGENERATOR|EVENTTARGET|EVENTARGUMENT)[^"\']*["\'][^>]*>', '', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'<input[^>]+type=["\']hidden["\'][^>]*>', '', clean, flags=re.IGNORECASE)
+
+        # 4. Strip session IDs or dynamic tokens in attributes/links
+        clean = re.sub(r'(\?|&)(?:sid|sessionid|sess|token|v|ver|_)=\w+', '', clean, flags=re.IGNORECASE)
+
+        # 5. Extract core content container if present (SCA & Associates / ASP.NET pages)
+        match = re.search(r'<(?:div|table)[^>]+id=["\'](?:HomepagecontentControl|content_?control|main_?content|form1|aspnetform)["\'][^>]*>(.*?)</(?:div|table)>', clean, flags=re.DOTALL | re.IGNORECASE)
+        if match:
+            clean = match.group(1)
+
+        # 6. Strip headers, footers, navs
+        clean = re.sub(r'<(?:header|footer|nav)\b[^>]*>.*?</(?:header|footer|nav)>', '', clean, flags=re.DOTALL | re.IGNORECASE)
+
+        # 7. Normalize all whitespace sequences
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        return clean
+
+    def compute_content_fingerprint(self, html_content, title="", category="", notification_number="", attachment_urls=None):
+        """
+        Computes a stable SHA-256 fingerprint hash of the published article content and metadata.
+        Guarantees that re-scraping an unchanged article results in the identical hash.
+        """
+        norm_html = self.normalize_html_for_fingerprint(html_content)
+        t_clean = re.sub(r'\s+', ' ', (title or "").strip().lower())
+        c_clean = re.sub(r'\s+', ' ', (category or "").strip().lower())
+        n_clean = (notification_number or "").strip().lower()
+        if n_clean in ['n/a', 'none', '']:
+            n_clean = ''
+            
+        att_str = ""
+        if attachment_urls:
+            sorted_atts = sorted([str(u).strip().lower() for u in attachment_urls if u])
+            att_str = "|".join(sorted_atts)
+
+        fingerprint_payload = f"{norm_html}|{t_clean}|{c_clean}|{n_clean}|{att_str}"
+        return hashlib.sha256(fingerprint_payload.encode('utf-8')).hexdigest()
+
 
