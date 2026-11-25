@@ -17,9 +17,9 @@ on:
         required: false
         default: '0'
 
-  # Automated scheduled scraping every 6 hours (UTC)
-  schedule:
-    - cron: '0 */6 * * *'
+  # # Automated scheduled scraping every 6 hours (UTC)
+  # schedule:
+  #   - cron: '0 */6 * * *'
 
 concurrency:
   group: scraper-job
